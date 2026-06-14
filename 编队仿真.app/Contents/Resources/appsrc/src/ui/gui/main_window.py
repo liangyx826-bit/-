@@ -322,6 +322,7 @@ class SelectButton(QPushButton):
         self.setObjectName("selectButton")
         self.setMinimumWidth(min_width)
         self.clicked.connect(self.show_menu)
+        self._menu.aboutToHide.connect(lambda: self.setDown(False))
 
     def addItem(self, text: str, data: object | None = None) -> None:
         self._items.append((text, data))
@@ -353,6 +354,7 @@ class SelectButton(QPushButton):
         return self._items[self._index][1]
 
     def show_menu(self) -> None:
+        self.setDown(True)
         self._menu.clear()
         self._menu.setMinimumWidth(self.width())
         for index, (text, _) in enumerate(self._items):
@@ -637,6 +639,7 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self._on_tick)
         self.log_dialog = LogDialog(self)
         self._build_ui()
+        self._install_button_cursors()
         self._apply_theme()
         self._update_snapshot(self.sim.snapshot())
         self._log("SimControl", "初始化场景，等待 start 命令")
@@ -848,8 +851,16 @@ class MainWindow(QMainWindow):
         table.verticalHeader().setMinimumSectionSize(30)
         table.setFixedHeight(138)
 
+    def _install_button_cursors(self) -> None:
+        for button in self.findChildren(QPushButton):
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+
     def _apply_theme(self) -> None:
         theme = self.theme
+        button_hover = theme.line.lighter(108)
+        button_pressed = theme.line.darker(108)
+        button_border_hover = theme.accent
+        menu_selected = theme.line.lighter(112)
         self.setStyleSheet(
             f"""
             QMainWindow, QWidget {{
@@ -927,10 +938,29 @@ class MainWindow(QMainWindow):
                 min-height: 28px;
                 padding: 0 10px;
             }}
+            QPushButton:hover {{
+                background: {button_hover.name()};
+                border-color: {button_border_hover.name()};
+            }}
+            QPushButton:pressed, QPushButton:down {{
+                background: {button_pressed.name()};
+                border-color: {theme.accent.name()};
+                padding-top: 1px;
+                padding-left: 11px;
+            }}
+            QPushButton:disabled {{
+                color: {theme.muted.name()};
+                background: {theme.line.name()};
+                border-color: {theme.line.name()};
+            }}
             QPushButton#selectButton {{
                 text-align: left;
                 padding-left: 10px;
                 padding-right: 10px;
+            }}
+            QPushButton#selectButton:pressed, QPushButton#selectButton:down {{
+                padding-left: 11px;
+                padding-right: 9px;
             }}
             QMenu {{
                 background: {theme.field.name()};
@@ -941,7 +971,7 @@ class MainWindow(QMainWindow):
                 padding: 4px;
             }}
             QMenu::item:selected {{
-                background: {theme.line.name()};
+                background: {menu_selected.name()};
             }}
             QTableWidget {{
                 background: {theme.field.name()};
