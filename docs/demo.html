@@ -1,0 +1,1404 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>编队仿真 Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #d8dee7;
+      --accent: #0f766e;
+      --accent-ink: #ffffff;
+      --warn: #b45309;
+      --danger: #b42318;
+      --ok: #15803d;
+      --leader: #2563eb;
+      --wingman: #7c3aed;
+      --link: #0891b2;
+      --canvas: #eef3f7;
+      --shadow: 0 8px 22px rgba(16, 24, 40, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 1120px;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    .app {
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 52px 1fr;
+    }
+
+    header {
+      position: relative;
+      z-index: 10;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: center;
+      gap: 18px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .run-summary {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .menu-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-pill {
+      min-width: 72px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: #e7f6f2;
+      color: var(--accent);
+      text-align: center;
+      font-weight: 700;
+    }
+
+    .report-pill {
+      min-width: 112px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: #eef4ff;
+      color: #175cd3;
+      text-align: center;
+      font-weight: 700;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: 230px minmax(560px, 1fr) 390px;
+      gap: 10px;
+      padding: 10px;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    main > aside,
+    main > .stage {
+      min-height: 0;
+    }
+
+    aside,
+    .stage,
+    .log-popover {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    aside {
+      padding: 10px;
+      overflow: auto;
+    }
+
+    .stage {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .stage:fullscreen {
+      width: 100vw;
+      height: 100vh;
+      border: 0;
+      border-radius: 0;
+      background: var(--panel);
+    }
+
+    .stage-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .stage-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .icon-button {
+      width: 30px;
+      min-width: 30px;
+      padding: 0;
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    .legend {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .stage-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .view-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .view-option input {
+      width: 14px;
+      height: 14px;
+      margin: 0;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--leader);
+    }
+
+    .dot.wingman {
+      background: var(--wingman);
+    }
+
+    .dot.warn {
+      background: var(--warn);
+    }
+
+    .dot.link {
+      background: var(--link);
+    }
+
+    .canvas-wrap {
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--canvas);
+    }
+
+    .view-stack {
+      height: 100%;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) 168px;
+      gap: 1px;
+      min-height: 0;
+      background: var(--line);
+    }
+
+    .view-panel {
+      position: relative;
+      min-height: 0;
+      background: var(--canvas);
+      overflow: hidden;
+    }
+
+    .top-view canvas {
+      cursor: grab;
+    }
+
+    .top-view canvas.dragging {
+      cursor: grabbing;
+    }
+
+    .view-label {
+      position: absolute;
+      left: 12px;
+      top: 10px;
+      z-index: 1;
+      padding: 4px 8px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.82);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      pointer-events: none;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .overlay {
+      position: absolute;
+      left: 14px;
+      bottom: 14px;
+      display: grid;
+      grid-template-columns: repeat(4, auto);
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .metric {
+      min-width: 92px;
+      padding: 8px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.72);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.86);
+      box-shadow: 0 4px 12px rgba(16, 24, 40, 0.08);
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .metric-value {
+      margin-top: 3px;
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .timeline {
+      height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+      border-top: 1px solid var(--line);
+    }
+
+    .timeline-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .timeline-controls button {
+      min-width: 52px;
+      height: 28px;
+      padding: 0 10px;
+    }
+
+    .range {
+      flex: 1;
+      height: 6px;
+      border-radius: 999px;
+      background: #d9e4ef;
+      overflow: hidden;
+    }
+
+    .range-fill {
+      width: 0%;
+      height: 100%;
+      background: var(--accent);
+    }
+
+    .section {
+      margin-bottom: 12px;
+    }
+
+    .section:last-child {
+      margin-bottom: 0;
+    }
+
+    h2 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    select,
+    input[type="number"],
+    input[type="range"] {
+      width: 100%;
+    }
+
+    select,
+    input[type="number"] {
+      height: 30px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    .form-row {
+      margin-bottom: 8px;
+    }
+
+    .button-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+    }
+
+    button {
+      height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: var(--accent-ink);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.46;
+    }
+
+    .wide {
+      grid-column: span 2;
+    }
+
+    .slider-row {
+      display: grid;
+      grid-template-columns: 1fr 44px;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .file-row {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
+
+    .file-input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+    }
+
+    .file-button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .file-name {
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .slider-value {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+    }
+
+    .state-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .state-table th,
+    .state-table td {
+      padding: 6px 5px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .state-table th {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-width: 44px;
+      justify-content: center;
+      padding: 3px 7px;
+      border-radius: 999px;
+      background: #eef4ff;
+      color: #175cd3;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .tag.ok {
+      background: #e8f7ee;
+      color: var(--ok);
+    }
+
+    .tag.warn {
+      background: #fff4e5;
+      color: var(--warn);
+    }
+
+    .tag.danger {
+      background: #fee4e2;
+      color: var(--danger);
+    }
+
+    .log-popover {
+      position: absolute;
+      top: 48px;
+      right: 20px;
+      width: min(720px, calc(100vw - 40px));
+      height: 360px;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: 38px 1fr;
+      transform-origin: top right;
+    }
+
+    .log-popover[hidden] {
+      display: none;
+    }
+
+    .log-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .log-title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .log-list {
+      margin: 0;
+      padding: 8px 14px;
+      overflow: auto;
+      list-style: none;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .log-list li {
+      display: grid;
+      grid-template-columns: 66px 78px 1fr;
+      gap: 10px;
+      padding: 2px 0;
+      color: var(--muted);
+    }
+
+    .log-level {
+      font-weight: 700;
+    }
+
+    .log-level.info {
+      color: #175cd3;
+    }
+
+    .log-level.warn {
+      color: var(--warn);
+    }
+
+    .log-level.event {
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>编队仿真 Demo</h1>
+      <div class="run-summary">
+        <span>场景：三机楔形队形</span>
+        <span>步长：0.1s</span>
+        <span class="status-pill" id="runState">READY</span>
+        <span class="report-pill" id="controlReport">回报：待命</span>
+        <div class="menu-bar">
+          <button id="logMenuBtn">事件日志</button>
+        </div>
+      </div>
+      <section class="log-popover" id="logPopover" hidden>
+        <div class="log-head">
+          <div class="log-title">事件日志</div>
+          <button id="logClearBtn">清空</button>
+        </div>
+        <ul class="log-list" id="logList"></ul>
+      </section>
+    </header>
+
+    <main>
+      <aside>
+        <section class="section">
+          <h2>配置</h2>
+          <div class="form-row">
+            <label for="configFile">配置文件</label>
+            <div class="file-row">
+              <label class="file-button" for="configFile">选择配置文件</label>
+              <input class="file-input" id="configFile" type="file" accept=".yaml,.yml,.json">
+              <div class="file-name" id="configFileName">未选择</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <label for="scenario">场景</label>
+            <select id="scenario">
+              <option>三机楔形跟踪</option>
+              <option>五机纵队巡航</option>
+              <option>通信受限重构</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="algorithm">节点算法</label>
+            <select id="algorithm">
+              <option>SimpleFollower</option>
+              <option>ConsensusFollower</option>
+              <option>RuleBasedFollower</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="duration">仿真时长 s</label>
+            <input id="duration" type="number" min="20" max="300" value="120">
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>播放</h2>
+          <div class="form-row">
+            <label for="speed">速度倍率</label>
+            <div class="slider-row">
+              <input id="speed" type="range" min="0.1" max="10" step="0.1" value="1">
+              <span class="slider-value" id="speedValue">1.0x</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <h2>运行期扰动</h2>
+          <div class="button-grid">
+            <button id="windBtn">风场脉冲</button>
+            <button id="faultBtn">节点故障</button>
+            <button id="lossBtn">链路丢包</button>
+            <button id="clearBtn">清除扰动</button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="stage">
+        <div class="stage-toolbar">
+          <div class="stage-title">
+            <span>二维实时显示</span>
+            <button class="icon-button" id="fullscreenBtn" title="全屏显示" aria-label="全屏显示">⛶</button>
+          </div>
+          <div class="stage-actions">
+            <div class="legend">
+              <span><i class="dot"></i>长机</span>
+              <span><i class="dot wingman"></i>僚机</span>
+              <span><i class="dot link"></i>通信链路</span>
+              <span><i class="dot warn"></i>异常状态</span>
+            </div>
+            <label class="view-option">
+              <input id="autoFitView" type="checkbox">
+              自动居中
+            </label>
+            <button id="resetViewBtn">重置视图</button>
+          </div>
+        </div>
+        <div class="canvas-wrap">
+          <div class="view-stack">
+            <div class="view-panel top-view">
+              <div class="view-label">俯视图：滚轮缩放，拖动平移</div>
+              <canvas id="simCanvas"></canvas>
+              <div class="overlay">
+                <div class="metric">
+                  <div class="metric-label">仿真时间</div>
+                  <div class="metric-value" id="timeMetric">0.0s</div>
+                </div>
+                <div class="metric">
+                  <div class="metric-label">队形误差</div>
+                  <div class="metric-value" id="errorMetric">0.00</div>
+                </div>
+                <div class="metric">
+                  <div class="metric-label">通信质量</div>
+                  <div class="metric-value" id="linkMetric">100%</div>
+                </div>
+                <div class="metric">
+                  <div class="metric-label">扰动状态</div>
+                  <div class="metric-value" id="disturbMetric">无</div>
+                </div>
+              </div>
+            </div>
+            <div class="view-panel side-view">
+              <div class="view-label">侧视图：待飞距 / 高度</div>
+              <canvas id="sideCanvas"></canvas>
+            </div>
+          </div>
+        </div>
+        <div class="timeline">
+          <span id="timelineText">0.0 / 120s</span>
+          <div class="timeline-controls">
+            <button class="primary" id="startBtn">开始</button>
+            <button id="pauseBtn" disabled>暂停</button>
+            <button id="stepBtn">单步</button>
+            <button id="resetBtn">重置</button>
+          </div>
+          <div class="range"><div class="range-fill" id="rangeFill"></div></div>
+        </div>
+      </section>
+
+      <aside>
+        <section class="section">
+          <h2>节点状态</h2>
+          <table class="state-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>侧偏(m)</th>
+                <th>待飞距(m)</th>
+                <th>高度(m)</th>
+                <th>速度(m/s)</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody id="nodeRows"></tbody>
+          </table>
+        </section>
+
+        <section class="section">
+          <h2>链路状态</h2>
+          <table class="state-table">
+            <thead>
+              <tr>
+                <th>链路</th>
+                <th>延迟</th>
+                <th>丢包</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody id="linkRows"></tbody>
+          </table>
+        </section>
+      </aside>
+    </main>
+
+  </div>
+
+  <script>
+    const canvas = document.getElementById("simCanvas");
+    const ctx = canvas.getContext("2d");
+    const sideCanvas = document.getElementById("sideCanvas");
+    const sideCtx = sideCanvas.getContext("2d");
+    const stage = document.querySelector(".stage");
+    const runState = document.getElementById("runState");
+    const controlReport = document.getElementById("controlReport");
+    const startBtn = document.getElementById("startBtn");
+    const pauseBtn = document.getElementById("pauseBtn");
+    const stepBtn = document.getElementById("stepBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const fullscreenBtn = document.getElementById("fullscreenBtn");
+    const resetViewBtn = document.getElementById("resetViewBtn");
+    const autoFitView = document.getElementById("autoFitView");
+    const configFile = document.getElementById("configFile");
+    const configFileName = document.getElementById("configFileName");
+    const speedInput = document.getElementById("speed");
+    const speedValue = document.getElementById("speedValue");
+    const durationInput = document.getElementById("duration");
+    const timeMetric = document.getElementById("timeMetric");
+    const errorMetric = document.getElementById("errorMetric");
+    const linkMetric = document.getElementById("linkMetric");
+    const disturbMetric = document.getElementById("disturbMetric");
+    const timelineText = document.getElementById("timelineText");
+    const rangeFill = document.getElementById("rangeFill");
+    const nodeRows = document.getElementById("nodeRows");
+    const linkRows = document.getElementById("linkRows");
+    const logMenuBtn = document.getElementById("logMenuBtn");
+    const logPopover = document.getElementById("logPopover");
+    const logList = document.getElementById("logList");
+    const WORLD_WIDTH = 1600;
+    const WORLD_HEIGHT = 520;
+    const TRAIL_SECONDS = 18;
+
+    const state = {
+      running: false,
+      paused: false,
+      time: 0,
+      speed: 1,
+      linkQuality: 1,
+      disturbance: "无",
+      disturbanceUntil: 0,
+      faultNode: null,
+      lossUntil: 0,
+      nodes: [],
+      links: [],
+      timer: null,
+    };
+
+    const viewport = {
+      scale: 1,
+      offsetX: 0,
+      offsetY: 0,
+      dragging: false,
+      lastX: 0,
+      lastY: 0,
+      autoFit: false,
+    };
+
+    let resizeQueued = false;
+
+    function resetScenario() {
+      state.running = false;
+      state.paused = false;
+      state.time = 0;
+      state.linkQuality = 1;
+      state.disturbance = "无";
+      state.disturbanceUntil = 0;
+      state.faultNode = null;
+      state.lossUntil = 0;
+      state.nodes = [
+        { id: "A01", role: "leader", x: 140, y: 260, vx: 5.2, vy: -0.1, trail: [] },
+        { id: "A02", role: "wing", x: 92, y: 318, vx: 5.0, vy: 0.0, trail: [] },
+        { id: "A03", role: "wing", x: 88, y: 202, vx: 5.0, vy: 0.0, trail: [] },
+      ];
+      state.links = [
+        { from: "A01", to: "A02", latency: 18, loss: 0.01, ok: true },
+        { from: "A01", to: "A03", latency: 21, loss: 0.01, ok: true },
+        { from: "A02", to: "A03", latency: 30, loss: 0.02, ok: true },
+      ];
+      setControls();
+      addLog("event", "SimControl", "初始化场景，等待 start 命令");
+      render();
+    }
+
+    function resizeCanvasElement(targetCanvas, targetCtx) {
+      const rect = targetCanvas.parentElement.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      targetCanvas.width = Math.floor(rect.width * dpr);
+      targetCanvas.height = Math.floor(rect.height * dpr);
+      targetCanvas.style.width = `${rect.width}px`;
+      targetCanvas.style.height = `${rect.height}px`;
+      targetCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    function resizeCanvas() {
+      resizeCanvasElement(canvas, ctx);
+      resizeCanvasElement(sideCanvas, sideCtx);
+      render();
+    }
+
+    function scheduleResizeCanvas() {
+      if (resizeQueued) return;
+      resizeQueued = true;
+      const run = () => {
+        resizeCanvas();
+      };
+      window.requestAnimationFrame(() => {
+        run();
+        window.requestAnimationFrame(run);
+        window.setTimeout(run, 80);
+        window.setTimeout(() => {
+          resizeQueued = false;
+          run();
+        }, 180);
+      });
+    }
+
+    function resetViewport() {
+      viewport.scale = 1;
+      viewport.offsetX = 0;
+      viewport.offsetY = 0;
+      render();
+    }
+
+    function activeNodesForView() {
+      const active = state.nodes.filter((node) => node.id !== state.faultNode);
+      return active.length ? active : state.nodes;
+    }
+
+    function applyAutoFitViewport() {
+      if (!viewport.autoFit || !state.nodes.length) return;
+      const width = canvas.clientWidth || 600;
+      const height = canvas.clientHeight || 360;
+      const active = activeNodesForView();
+      const xs = active.map((node) => node.x);
+      const ys = active.map((node) => node.y);
+      const minX = Math.min(...xs);
+      const maxX = Math.max(...xs);
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+      viewport.offsetX = width / 2 - ((minX + maxX) / 2) * viewport.scale;
+      viewport.offsetY = height / 2 - ((minY + maxY) / 2) * viewport.scale;
+    }
+
+    function canvasPoint(event) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      };
+    }
+
+    function duration() {
+      return Math.max(20, Number(durationInput.value) || 120);
+    }
+
+    function stepSimulation(dt) {
+      const total = duration();
+      state.time = Math.min(total, state.time + dt * state.speed);
+      const wind = state.disturbance === "风场" ? 1.8 : 0;
+      const formation = [
+        { dx: 0, dy: 0 },
+        { dx: -54, dy: 58 },
+        { dx: -54, dy: -58 },
+      ];
+
+      state.nodes.forEach((node, index) => {
+        const leader = state.nodes[0];
+        const targetX = index === 0 ? node.x + 1.9 : leader.x + formation[index].dx;
+        const targetY = index === 0 ? 238 + Math.sin(state.time / 8) * 34 : leader.y + formation[index].dy;
+        const gain = state.faultNode === node.id ? 0.012 : 0.04;
+        node.vx = 4.8 + index * 0.12;
+        node.vy += (targetY - node.y) * gain + wind * Math.sin(state.time + index);
+        node.x += node.vx * dt * state.speed * 3.2;
+        node.y += node.vy * dt * state.speed;
+        if (node.x > WORLD_WIDTH + 60) node.x = -30;
+        node.trail.push({ x: node.x, y: node.y, altitude: nodeAltitude(index), t: state.time });
+        node.trail = node.trail.filter((point) => state.time - point.t <= TRAIL_SECONDS);
+      });
+
+      if (state.time > state.disturbanceUntil && state.disturbance !== "无") {
+        state.disturbance = "无";
+        state.faultNode = null;
+        addLog("event", "Disturb", "扰动窗口结束，恢复标称配置");
+      }
+
+      state.linkQuality = state.time < state.lossUntil ? 0.62 : 0.96 + Math.sin(state.time / 5) * 0.03;
+      state.links.forEach((link, index) => {
+        const degraded = state.time < state.lossUntil && index !== 2;
+        link.loss = degraded ? 0.26 + index * 0.05 : 0.01 + index * 0.006;
+        link.latency = degraded ? 76 + index * 8 : 18 + index * 5 + Math.round(Math.sin(state.time + index) * 3);
+        link.ok = link.loss < 0.2;
+      });
+
+      if (state.time >= total) {
+        stopLoop();
+        addLog("info", "Logger", "仿真达到配置时长，记录最终状态快照");
+      }
+    }
+
+    function startLoop() {
+      if (state.running && !state.paused) return;
+      state.running = true;
+      state.paused = false;
+      setControls();
+      addLog("event", "UI", "发送 start/resume 命令");
+      if (!state.timer) {
+        state.timer = window.setInterval(() => {
+          if (!state.paused) {
+            stepSimulation(0.1);
+            render();
+          }
+        }, 100);
+      }
+    }
+
+    function pauseLoop() {
+      if (!state.running) return;
+      state.paused = !state.paused;
+      setControls();
+      addLog("event", "UI", state.paused ? "发送 pause 命令" : "发送 resume 命令");
+    }
+
+    function stopLoop() {
+      state.running = false;
+      state.paused = false;
+      if (state.timer) {
+        window.clearInterval(state.timer);
+        state.timer = null;
+      }
+      setControls();
+      render();
+    }
+
+    function singleStep() {
+      if (!state.running) {
+        state.running = true;
+        state.paused = true;
+      }
+      stepSimulation(0.1);
+      setControls();
+      addLog("event", "UI", "发送 step 命令，推进一个仿真步");
+      render();
+    }
+
+    function setControls() {
+      runState.textContent = state.running ? (state.paused ? "PAUSED" : "RUNNING") : "READY";
+      controlReport.textContent = state.running ? (state.paused ? "回报：保持" : "回报：集结") : "回报：待命";
+      startBtn.textContent = state.running && state.paused ? "继续" : "开始";
+      pauseBtn.textContent = state.paused ? "继续" : "暂停";
+      pauseBtn.disabled = !state.running;
+    }
+
+    async function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        await stage.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    }
+
+    function updateFullscreenButton() {
+      const active = document.fullscreenElement === stage;
+      fullscreenBtn.textContent = active ? "↙" : "⛶";
+      fullscreenBtn.title = active ? "退出全屏" : "全屏显示";
+      fullscreenBtn.setAttribute("aria-label", active ? "退出全屏" : "全屏显示");
+      scheduleResizeCanvas();
+    }
+
+    function injectDisturbance(type) {
+      if (type === "wind") {
+        state.disturbance = "风场";
+        state.disturbanceUntil = state.time + 8;
+        controlReport.textContent = "回报：抗风";
+        addLog("warn", "Disturb", "注入风场脉冲，转发到模型迭代");
+      }
+      if (type === "fault") {
+        state.disturbance = "节点故障";
+        state.faultNode = "A02";
+        state.disturbanceUntil = state.time + 10;
+        controlReport.textContent = "回报：重构";
+        addLog("warn", "Disturb", "注入 A02 控制效率下降");
+      }
+      if (type === "loss") {
+        state.disturbance = "链路丢包";
+        state.lossUntil = state.time + 12;
+        state.disturbanceUntil = state.time + 12;
+        controlReport.textContent = "回报：保链";
+        addLog("warn", "Disturb", "注入链路丢包，转发到通信功能");
+      }
+      render();
+    }
+
+    function clearDisturbance() {
+      state.disturbance = "无";
+      state.faultNode = null;
+      state.disturbanceUntil = 0;
+      state.lossUntil = 0;
+      controlReport.textContent = state.running ? "回报：集结" : "回报：待命";
+      addLog("event", "Disturb", "清除运行期扰动");
+      render();
+    }
+
+    function renderWorldGrid(targetCtx, width, height) {
+      targetCtx.strokeStyle = "#d6e0ea";
+      targetCtx.lineWidth = 1 / viewport.scale;
+      for (let x = -480; x <= width + 480; x += 48) {
+        targetCtx.beginPath();
+        targetCtx.moveTo(x, -240);
+        targetCtx.lineTo(x, height + 240);
+        targetCtx.stroke();
+      }
+      for (let y = -240; y <= height + 240; y += 48) {
+        targetCtx.beginPath();
+        targetCtx.moveTo(-480, y);
+        targetCtx.lineTo(width + 480, y);
+        targetCtx.stroke();
+      }
+    }
+
+    function renderScreenBackground(targetCtx, width, height) {
+      targetCtx.fillStyle = "#eef3f7";
+      targetCtx.fillRect(0, 0, width, height);
+    }
+
+    function render() {
+      applyAutoFitViewport();
+      renderTopView();
+      renderSideView();
+      updateTables();
+      updateMetrics();
+    }
+
+    function renderTopView() {
+      const width = canvas.clientWidth || 600;
+      const height = canvas.clientHeight || 360;
+      renderScreenBackground(ctx, width, height);
+      ctx.save();
+      ctx.translate(viewport.offsetX, viewport.offsetY);
+      ctx.scale(viewport.scale, viewport.scale);
+      renderWorldGrid(ctx, WORLD_WIDTH, WORLD_HEIGHT);
+      drawRoute(ctx, WORLD_WIDTH, WORLD_HEIGHT);
+      drawLinks(ctx);
+      drawNodes(ctx);
+      ctx.restore();
+    }
+
+    function drawRoute(targetCtx, width, height) {
+      targetCtx.strokeStyle = "#94a3b8";
+      targetCtx.setLineDash([8, 7]);
+      targetCtx.lineWidth = 2;
+      targetCtx.beginPath();
+      targetCtx.moveTo(40, height / 2);
+      targetCtx.bezierCurveTo(width * 0.35, height * 0.2, width * 0.66, height * 0.8, width - 40, height * 0.46);
+      targetCtx.stroke();
+      targetCtx.setLineDash([]);
+      targetCtx.fillStyle = "#334155";
+      targetCtx.beginPath();
+      targetCtx.arc(width - 42, height * 0.46, 5, 0, Math.PI * 2);
+      targetCtx.fill();
+    }
+
+    function drawLinks(targetCtx) {
+      const byId = Object.fromEntries(state.nodes.map((node) => [node.id, node]));
+      state.links.forEach((link) => {
+        const from = byId[link.from];
+        const to = byId[link.to];
+        targetCtx.strokeStyle = link.ok ? "rgba(8, 145, 178, 0.58)" : "rgba(180, 83, 9, 0.7)";
+        targetCtx.lineWidth = link.ok ? 2 : 3;
+        targetCtx.beginPath();
+        targetCtx.moveTo(from.x, from.y);
+        targetCtx.lineTo(to.x, to.y);
+        targetCtx.stroke();
+      });
+    }
+
+    function drawNodes(targetCtx) {
+      state.nodes.forEach((node, index) => {
+        if (node.trail.length > 2) {
+          targetCtx.lineWidth = 2;
+          for (let i = 1; i < node.trail.length; i += 1) {
+            const previous = node.trail[i - 1];
+            const current = node.trail[i];
+            const age = Math.max(0, state.time - current.t);
+            const alpha = Math.max(0.08, 1 - age / TRAIL_SECONDS);
+            targetCtx.strokeStyle = index === 0
+              ? `rgba(37, 99, 235, ${0.52 * alpha})`
+              : `rgba(124, 58, 237, ${0.44 * alpha})`;
+            targetCtx.beginPath();
+            targetCtx.moveTo(previous.x, previous.y);
+            targetCtx.lineTo(current.x, current.y);
+            targetCtx.stroke();
+          }
+        }
+
+        const fault = state.faultNode === node.id;
+        targetCtx.save();
+        targetCtx.translate(node.x, node.y);
+        targetCtx.rotate(Math.atan2(node.vy, node.vx));
+        targetCtx.fillStyle = fault ? "#b45309" : index === 0 ? "#2563eb" : "#7c3aed";
+        targetCtx.strokeStyle = "#ffffff";
+        targetCtx.lineWidth = 2;
+        targetCtx.beginPath();
+        targetCtx.moveTo(16, 0);
+        targetCtx.lineTo(-12, -9);
+        targetCtx.lineTo(-6, 0);
+        targetCtx.lineTo(-12, 9);
+        targetCtx.closePath();
+        targetCtx.fill();
+        targetCtx.stroke();
+        targetCtx.restore();
+
+        targetCtx.fillStyle = "#101828";
+        targetCtx.font = "12px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+        targetCtx.fillText(node.id, node.x - 13, node.y - 18);
+      });
+    }
+
+    function nodeAltitude(index) {
+      return 1200 + index * 35 + Math.sin(state.time / 6 + index) * 12;
+    }
+
+    function renderSideView() {
+      const width = sideCanvas.clientWidth || 600;
+      const height = sideCanvas.clientHeight || 150;
+      renderScreenBackground(sideCtx, width, height);
+      sideCtx.strokeStyle = "#d6e0ea";
+      sideCtx.lineWidth = 1;
+      for (let x = 56; x < width; x += 88) {
+        sideCtx.beginPath();
+        sideCtx.moveTo(x, 0);
+        sideCtx.lineTo(x, height);
+        sideCtx.stroke();
+      }
+      for (let y = 28; y < height; y += 40) {
+        sideCtx.beginPath();
+        sideCtx.moveTo(0, y);
+        sideCtx.lineTo(width, y);
+        sideCtx.stroke();
+      }
+
+      const minAlt = 1120;
+      const maxAlt = 1320;
+      const mapX = (x) => x * viewport.scale + viewport.offsetX;
+      const mapY = (alt) => height - 24 - ((alt - minAlt) / (maxAlt - minAlt)) * (height - 52);
+      const startX = Math.max(-40, mapX(0));
+      const endX = Math.min(width + 40, mapX(WORLD_WIDTH));
+
+      sideCtx.strokeStyle = "#94a3b8";
+      sideCtx.setLineDash([7, 6]);
+      sideCtx.lineWidth = 2;
+      sideCtx.beginPath();
+      sideCtx.moveTo(startX, mapY(1200));
+      sideCtx.lineTo(endX, mapY(1260));
+      sideCtx.stroke();
+      sideCtx.setLineDash([]);
+
+      state.nodes.forEach((node, index) => {
+        if (node.trail.length <= 2) return;
+        sideCtx.lineWidth = 2;
+        for (let i = 1; i < node.trail.length; i += 1) {
+          const previous = node.trail[i - 1];
+          const current = node.trail[i];
+          const previousX = mapX(previous.x);
+          const currentX = mapX(current.x);
+          if ((previousX < -24 && currentX < -24) || (previousX > width + 24 && currentX > width + 24)) continue;
+          const age = Math.max(0, state.time - current.t);
+          const alpha = Math.max(0.08, 1 - age / TRAIL_SECONDS);
+          sideCtx.strokeStyle = index === 0
+            ? `rgba(37, 99, 235, ${0.48 * alpha})`
+            : `rgba(124, 58, 237, ${0.40 * alpha})`;
+          sideCtx.beginPath();
+          sideCtx.moveTo(previousX, mapY(previous.altitude));
+          sideCtx.lineTo(currentX, mapY(current.altitude));
+          sideCtx.stroke();
+        }
+      });
+
+      state.nodes.forEach((node, index) => {
+        const fault = state.faultNode === node.id;
+        const x = mapX(node.x);
+        if (x < -24 || x > width + 24) return;
+        const y = mapY(nodeAltitude(index));
+        sideCtx.fillStyle = fault ? "#b45309" : index === 0 ? "#2563eb" : "#7c3aed";
+        sideCtx.strokeStyle = "#ffffff";
+        sideCtx.lineWidth = 2;
+        sideCtx.beginPath();
+        sideCtx.arc(x, y, 8, 0, Math.PI * 2);
+        sideCtx.fill();
+        sideCtx.stroke();
+        sideCtx.fillStyle = "#101828";
+        sideCtx.font = "12px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+        sideCtx.fillText(node.id, x + 10, y + 4);
+      });
+
+      sideCtx.fillStyle = "#667085";
+      sideCtx.font = "11px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+      sideCtx.fillText("待飞距", width - 76, height - 8);
+      sideCtx.fillText("高度", 12, 20);
+    }
+
+    function updateTables() {
+      nodeRows.innerHTML = state.nodes.map((node, index) => {
+        const speed = Math.hypot(node.vx, node.vy).toFixed(1);
+        const sideOffset = ((node.y - WORLD_HEIGHT / 2) * 0.8).toFixed(0);
+        const distanceToGo = Math.max(0, (WORLD_WIDTH - node.x) * 4).toFixed(0);
+        const altitude = nodeAltitude(index).toFixed(0);
+        const tagClass = state.faultNode === node.id ? "warn" : "ok";
+        const label = state.faultNode === node.id ? "降级" : "正常";
+        return `<tr>
+          <td>${node.id}</td>
+          <td>${sideOffset}</td>
+          <td>${distanceToGo}</td>
+          <td>${altitude}</td>
+          <td>${speed}</td>
+          <td><span class="tag ${tagClass}">${label}</span></td>
+        </tr>`;
+      }).join("");
+
+      linkRows.innerHTML = state.links.map((link) => {
+        const tagClass = link.ok ? "ok" : "danger";
+        const label = link.ok ? "正常" : "丢包";
+        return `<tr>
+          <td>${link.from}-${link.to}</td>
+          <td>${link.latency}ms</td>
+          <td>${Math.round(link.loss * 100)}%</td>
+          <td><span class="tag ${tagClass}">${label}</span></td>
+        </tr>`;
+      }).join("");
+    }
+
+    function updateMetrics() {
+      const total = duration();
+      const progress = Math.min(100, (state.time / total) * 100);
+      const err = state.nodes.reduce((sum, node, index) => {
+        if (index === 0) return sum;
+        const leader = state.nodes[0];
+        const expectedY = index === 1 ? leader.y + 58 : leader.y - 58;
+        return sum + Math.abs(expectedY - node.y);
+      }, 0) / 2;
+      timeMetric.textContent = `${state.time.toFixed(1)}s`;
+      errorMetric.textContent = err.toFixed(2);
+      linkMetric.textContent = `${Math.round(state.linkQuality * 100)}%`;
+      disturbMetric.textContent = state.disturbance;
+      timelineText.textContent = `${state.time.toFixed(1)} / ${total}s`;
+      rangeFill.style.width = `${progress}%`;
+    }
+
+    function addLog(level, source, text) {
+      const line = document.createElement("li");
+      const stamp = state ? state.time.toFixed(1).padStart(5, "0") : "000.0";
+      line.innerHTML = `<span>${stamp}s</span><span class="log-level ${level}">${source}</span><span>${text}</span>`;
+      logList.prepend(line);
+      while (logList.children.length > 80) logList.lastElementChild.remove();
+    }
+
+    startBtn.addEventListener("click", startLoop);
+    pauseBtn.addEventListener("click", pauseLoop);
+    stepBtn.addEventListener("click", singleStep);
+    fullscreenBtn.addEventListener("click", () => {
+      toggleFullscreen().catch(() => {
+        addLog("warn", "UI", "浏览器拒绝进入全屏");
+      });
+    });
+    document.addEventListener("fullscreenchange", updateFullscreenButton);
+    logMenuBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      logPopover.hidden = !logPopover.hidden;
+    });
+    logPopover.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+    document.addEventListener("click", () => {
+      logPopover.hidden = true;
+    });
+    configFile.addEventListener("change", () => {
+      const file = configFile.files && configFile.files[0];
+      configFileName.textContent = file ? file.name : "未选择";
+      if (file) {
+        controlReport.textContent = "回报：配置已载入";
+        addLog("event", "Config", `选择配置文件 ${file.name}`);
+      }
+    });
+    resetViewBtn.addEventListener("click", resetViewport);
+    autoFitView.addEventListener("change", () => {
+      viewport.autoFit = autoFitView.checked;
+      render();
+    });
+    resetBtn.addEventListener("click", () => {
+      stopLoop();
+      resetScenario();
+      resetViewport();
+    });
+    canvas.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      const point = canvasPoint(event);
+      const beforeX = (point.x - viewport.offsetX) / viewport.scale;
+      const beforeY = (point.y - viewport.offsetY) / viewport.scale;
+      const factor = event.deltaY < 0 ? 1.12 : 0.89;
+      viewport.scale = Math.min(3.5, Math.max(0.45, viewport.scale * factor));
+      viewport.offsetX = point.x - beforeX * viewport.scale;
+      viewport.offsetY = point.y - beforeY * viewport.scale;
+      render();
+    }, { passive: false });
+    canvas.addEventListener("mousedown", (event) => {
+      viewport.dragging = true;
+      viewport.lastX = event.clientX;
+      viewport.lastY = event.clientY;
+      canvas.classList.add("dragging");
+    });
+    window.addEventListener("mousemove", (event) => {
+      if (!viewport.dragging) return;
+      viewport.offsetX += event.clientX - viewport.lastX;
+      viewport.offsetY += event.clientY - viewport.lastY;
+      viewport.lastX = event.clientX;
+      viewport.lastY = event.clientY;
+      render();
+    });
+    window.addEventListener("mouseup", () => {
+      viewport.dragging = false;
+      canvas.classList.remove("dragging");
+    });
+    speedInput.addEventListener("input", () => {
+      state.speed = Number(speedInput.value);
+      speedValue.textContent = `${state.speed.toFixed(1)}x`;
+    });
+    durationInput.addEventListener("change", render);
+    document.getElementById("windBtn").addEventListener("click", () => injectDisturbance("wind"));
+    document.getElementById("faultBtn").addEventListener("click", () => injectDisturbance("fault"));
+    document.getElementById("lossBtn").addEventListener("click", () => injectDisturbance("loss"));
+    document.getElementById("clearBtn").addEventListener("click", clearDisturbance);
+    document.getElementById("logClearBtn").addEventListener("click", () => {
+      logList.innerHTML = "";
+      addLog("event", "Logger", "清空事件日志");
+    });
+    if ("ResizeObserver" in window) {
+      const viewResizeObserver = new ResizeObserver(scheduleResizeCanvas);
+      viewResizeObserver.observe(stage);
+      viewResizeObserver.observe(canvas.parentElement);
+      viewResizeObserver.observe(sideCanvas.parentElement);
+    }
+
+    window.addEventListener("resize", scheduleResizeCanvas);
+
+    resetScenario();
+    scheduleResizeCanvas();
+  </script>
+</body>
+</html>
