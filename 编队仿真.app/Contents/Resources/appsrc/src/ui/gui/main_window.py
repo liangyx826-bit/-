@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from PySide6.QtCore import QPoint, QPointF, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -373,6 +373,9 @@ class SelectButton(QPushButton):
 class TopView(QGraphicsView):
     """Top-down formation view with pan and zoom."""
 
+    viewChanged = Signal()
+    manualViewChanged = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.snapshot: Snapshot | None = None
@@ -380,7 +383,9 @@ class TopView(QGraphicsView):
         self.scale_value = 1.0
         self.offset = QPointF(0.0, 0.0)
         self.auto_center = False
-        self._drag_origin: QPointF | None = None
+        self._pan_origin: QPointF | None = None
+        self._selection_origin: QPointF | None = None
+        self._selection_current: QPointF | None = None
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setMinimumHeight(360)
@@ -400,38 +405,70 @@ class TopView(QGraphicsView):
         self.scale_value = 1.0
         self.offset = QPointF(0.0, 0.0)
         self.viewport().update()
+        self.viewChanged.emit()
+        self.manualViewChanged.emit()
 
     def wheelEvent(self, event) -> None:  # noqa: ANN001
-        factor = 1.12 if event.angleDelta().y() > 0 else 0.89
+        delta = event.pixelDelta().y() or event.angleDelta().y()
+        if delta == 0:
+            return
         cursor = event.position()
         before = QPointF(
             (cursor.x() - self.offset.x()) / self.scale_value,
             (cursor.y() - self.offset.y()) / self.scale_value,
         )
+        factor = math.pow(1.001, delta)
         self.scale_value = min(3.5, max(0.45, self.scale_value * factor))
         self.offset = QPointF(
             cursor.x() - before.x() * self.scale_value,
             cursor.y() - before.y() * self.scale_value,
         )
         self.viewport().update()
+        self.viewChanged.emit()
+        self.manualViewChanged.emit()
+        event.accept()
 
     def mousePressEvent(self, event) -> None:  # noqa: ANN001
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_origin = event.position()
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._pan_origin = event.position()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self._selection_origin = event.position()
+            self._selection_current = event.position()
+            self.viewport().update()
+            event.accept()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: ANN001
-        if self._drag_origin is None:
-            return
-        delta = event.position() - self._drag_origin
-        self.offset += QPointF(delta.x(), delta.y())
-        self._drag_origin = event.position()
-        self.viewport().update()
+        if self._pan_origin is not None:
+            delta = event.position() - self._pan_origin
+            self.offset += QPointF(delta.x(), delta.y())
+            self._pan_origin = event.position()
+            self.viewport().update()
+            self.viewChanged.emit()
+            self.manualViewChanged.emit()
+            event.accept()
+        elif self._selection_origin is not None:
+            self._selection_current = event.position()
+            self.viewport().update()
+            event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_origin = None
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._pan_origin = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self._zoom_to_selection()
+            self._selection_origin = None
+            self._selection_current = None
+            self.viewport().update()
+            event.accept()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.reset_view()
+            event.accept()
 
     def paintEvent(self, event) -> None:  # noqa: ARG002, ANN001
         painter = QPainter(self.viewport())
@@ -444,6 +481,58 @@ class TopView(QGraphicsView):
         if self.snapshot:
             self._draw_links(painter, self.snapshot)
             self._draw_nodes(painter, self.snapshot)
+        painter.resetTransform()
+        self._draw_selection(painter)
+
+    def _viewport_to_world(self, point: QPointF) -> QPointF:
+        return QPointF(
+            (point.x() - self.offset.x()) / self.scale_value,
+            (point.y() - self.offset.y()) / self.scale_value,
+        )
+
+    def _zoom_to_selection(self) -> None:
+        if self._selection_origin is None or self._selection_current is None:
+            return
+        left = min(self._selection_origin.x(), self._selection_current.x())
+        right = max(self._selection_origin.x(), self._selection_current.x())
+        top = min(self._selection_origin.y(), self._selection_current.y())
+        bottom = max(self._selection_origin.y(), self._selection_current.y())
+        if right - left < 8 or bottom - top < 8:
+            return
+
+        world_start = self._viewport_to_world(QPointF(left, top))
+        world_end = self._viewport_to_world(QPointF(right, bottom))
+        world_width = max(1.0, abs(world_end.x() - world_start.x()))
+        world_height = max(1.0, abs(world_end.y() - world_start.y()))
+        viewport = self.viewport().rect()
+        margin = 0.94
+        scale = min(viewport.width() / world_width, viewport.height() / world_height) * margin
+        self.scale_value = min(3.5, max(0.45, scale))
+
+        center_x = (world_start.x() + world_end.x()) / 2.0
+        center_y = (world_start.y() + world_end.y()) / 2.0
+        self.offset = QPointF(
+            viewport.width() / 2.0 - center_x * self.scale_value,
+            viewport.height() / 2.0 - center_y * self.scale_value,
+        )
+        self.viewChanged.emit()
+        self.manualViewChanged.emit()
+
+    def _draw_selection(self, painter: QPainter) -> None:
+        if self._selection_origin is None or self._selection_current is None:
+            return
+        left = min(self._selection_origin.x(), self._selection_current.x())
+        right = max(self._selection_origin.x(), self._selection_current.x())
+        top = min(self._selection_origin.y(), self._selection_current.y())
+        bottom = max(self._selection_origin.y(), self._selection_current.y())
+        if right - left < 2 or bottom - top < 2:
+            return
+        selection = QRectF(left, top, right - left, bottom - top)
+        pen = QPen(self.theme.accent, 1.4)
+        pen.setDashPattern([5, 4])
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(selection)
 
     def _apply_auto_center(self) -> None:
         if not self.snapshot or not self.snapshot.nodes:
@@ -458,13 +547,25 @@ class TopView(QGraphicsView):
             rect.width() / 2.0 - center_x * self.scale_value,
             rect.height() / 2.0 - center_y * self.scale_value,
         )
+        self.viewChanged.emit()
 
     def _draw_grid(self, painter: QPainter) -> None:
+        rect = self.viewport().rect()
+        left = (rect.left() - self.offset.x()) / self.scale_value
+        right = (rect.right() - self.offset.x()) / self.scale_value
+        top = (rect.top() - self.offset.y()) / self.scale_value
+        bottom = (rect.bottom() - self.offset.y()) / self.scale_value
+        spacing = 48
+        start_x = math.floor(left / spacing) * spacing
+        end_x = math.ceil(right / spacing) * spacing
+        start_y = math.floor(top / spacing) * spacing
+        end_y = math.ceil(bottom / spacing) * spacing
+
         painter.setPen(QPen(self.theme.grid, 1.0 / self.scale_value))
-        for x in range(-480, int(WORLD_WIDTH) + 481, 48):
-            painter.drawLine(x, -240, x, int(WORLD_HEIGHT) + 240)
-        for y in range(-240, int(WORLD_HEIGHT) + 241, 48):
-            painter.drawLine(-480, y, int(WORLD_WIDTH) + 480, y)
+        for x in range(start_x, end_x + spacing, spacing):
+            painter.drawLine(x, start_y, x, end_y)
+        for y in range(start_y, end_y + spacing, spacing):
+            painter.drawLine(start_x, y, end_x, y)
 
     def _draw_route(self, painter: QPainter) -> None:
         pen = QPen(self.theme.route, 2)
@@ -816,6 +917,8 @@ class MainWindow(QMainWindow):
 
         self.top_view = TopView()
         self.side_view = SideView(self.top_view)
+        self.top_view.viewChanged.connect(self.side_view.update)
+        self.top_view.manualViewChanged.connect(self._disable_auto_center)
         layout.addWidget(self.top_view, 1)
         layout.addWidget(self.side_view, 0)
 
@@ -1141,6 +1244,10 @@ class MainWindow(QMainWindow):
     def _on_auto_center_changed(self) -> None:
         self.top_view.auto_center = self.auto_center.isChecked()
         self.top_view.set_snapshot(self.sim.snapshot())
+
+    def _disable_auto_center(self) -> None:
+        if self.auto_center.isChecked():
+            self.auto_center.setChecked(False)
 
     def _reset_view(self) -> None:
         self.top_view.reset_view()

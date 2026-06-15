@@ -300,7 +300,7 @@
     }
 
     .top-view canvas {
-      cursor: grab;
+      cursor: crosshair;
     }
 
     .top-view canvas.dragging {
@@ -730,7 +730,7 @@
         <div class="canvas-wrap">
           <div class="view-stack">
             <div class="view-panel top-view">
-              <div class="view-label">俯视图：滚轮缩放，拖动平移</div>
+              <div class="view-label">俯视图：中键平移，左键框选放大</div>
               <canvas id="simCanvas"></canvas>
               <div class="overlay">
                 <div class="metric">
@@ -861,9 +861,11 @@
       scale: 1,
       offsetX: 0,
       offsetY: 0,
-      dragging: false,
+      interaction: null,
       lastX: 0,
       lastY: 0,
+      selectionStart: null,
+      selectionEnd: null,
       autoFit: false,
     };
 
@@ -938,7 +940,14 @@
       viewport.scale = 1;
       viewport.offsetX = 0;
       viewport.offsetY = 0;
+      disableAutoFit();
       render();
+    }
+
+    function disableAutoFit() {
+      if (!viewport.autoFit) return;
+      viewport.autoFit = false;
+      autoFitView.checked = false;
     }
 
     function activeNodesForView() {
@@ -967,6 +976,36 @@
         x: event.clientX - rect.left,
         y: event.clientY - rect.top,
       };
+    }
+
+    function pointToWorld(point) {
+      return {
+        x: (point.x - viewport.offsetX) / viewport.scale,
+        y: (point.y - viewport.offsetY) / viewport.scale,
+      };
+    }
+
+    function zoomToSelection() {
+      if (!viewport.selectionStart || !viewport.selectionEnd) return;
+      const left = Math.min(viewport.selectionStart.x, viewport.selectionEnd.x);
+      const right = Math.max(viewport.selectionStart.x, viewport.selectionEnd.x);
+      const top = Math.min(viewport.selectionStart.y, viewport.selectionEnd.y);
+      const bottom = Math.max(viewport.selectionStart.y, viewport.selectionEnd.y);
+      if (right - left < 8 || bottom - top < 8) return;
+
+      const start = pointToWorld({ x: left, y: top });
+      const end = pointToWorld({ x: right, y: bottom });
+      const worldWidth = Math.max(1, Math.abs(end.x - start.x));
+      const worldHeight = Math.max(1, Math.abs(end.y - start.y));
+      const width = canvas.clientWidth || 600;
+      const height = canvas.clientHeight || 360;
+      const scale = Math.min(width / worldWidth, height / worldHeight) * 0.94;
+      viewport.scale = Math.min(3.5, Math.max(0.45, scale));
+      const centerX = (start.x + end.x) / 2;
+      const centerY = (start.y + end.y) / 2;
+      viewport.offsetX = width / 2 - centerX * viewport.scale;
+      viewport.offsetY = height / 2 - centerY * viewport.scale;
+      disableAutoFit();
     }
 
     function duration() {
@@ -1121,18 +1160,27 @@
     }
 
     function renderWorldGrid(targetCtx, width, height) {
+      const spacing = 48;
+      const left = (0 - viewport.offsetX) / viewport.scale;
+      const right = (width - viewport.offsetX) / viewport.scale;
+      const top = (0 - viewport.offsetY) / viewport.scale;
+      const bottom = (height - viewport.offsetY) / viewport.scale;
+      const startX = Math.floor(left / spacing) * spacing;
+      const endX = Math.ceil(right / spacing) * spacing;
+      const startY = Math.floor(top / spacing) * spacing;
+      const endY = Math.ceil(bottom / spacing) * spacing;
       targetCtx.strokeStyle = cssVar("--grid");
       targetCtx.lineWidth = 1 / viewport.scale;
-      for (let x = -480; x <= width + 480; x += 48) {
+      for (let x = startX; x <= endX + spacing; x += spacing) {
         targetCtx.beginPath();
-        targetCtx.moveTo(x, -240);
-        targetCtx.lineTo(x, height + 240);
+        targetCtx.moveTo(x, startY);
+        targetCtx.lineTo(x, endY);
         targetCtx.stroke();
       }
-      for (let y = -240; y <= height + 240; y += 48) {
+      for (let y = startY; y <= endY + spacing; y += spacing) {
         targetCtx.beginPath();
-        targetCtx.moveTo(-480, y);
-        targetCtx.lineTo(width + 480, y);
+        targetCtx.moveTo(startX, y);
+        targetCtx.lineTo(endX, y);
         targetCtx.stroke();
       }
     }
@@ -1157,11 +1205,26 @@
       ctx.save();
       ctx.translate(viewport.offsetX, viewport.offsetY);
       ctx.scale(viewport.scale, viewport.scale);
-      renderWorldGrid(ctx, WORLD_WIDTH, WORLD_HEIGHT);
+      renderWorldGrid(ctx, width, height);
       drawRoute(ctx, WORLD_WIDTH, WORLD_HEIGHT);
       drawLinks(ctx);
       drawNodes(ctx);
       ctx.restore();
+      drawSelection();
+    }
+
+    function drawSelection() {
+      if (!viewport.selectionStart || !viewport.selectionEnd) return;
+      const left = Math.min(viewport.selectionStart.x, viewport.selectionEnd.x);
+      const right = Math.max(viewport.selectionStart.x, viewport.selectionEnd.x);
+      const top = Math.min(viewport.selectionStart.y, viewport.selectionEnd.y);
+      const bottom = Math.max(viewport.selectionStart.y, viewport.selectionEnd.y);
+      if (right - left < 2 || bottom - top < 2) return;
+      ctx.strokeStyle = cssVar("--accent");
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeRect(left, top, right - left, bottom - top);
+      ctx.setLineDash([]);
     }
 
     function drawRoute(targetCtx, width, height) {
@@ -1420,29 +1483,56 @@
       const point = canvasPoint(event);
       const beforeX = (point.x - viewport.offsetX) / viewport.scale;
       const beforeY = (point.y - viewport.offsetY) / viewport.scale;
-      const factor = event.deltaY < 0 ? 1.12 : 0.89;
+      const factor = Math.pow(1.001, -event.deltaY);
       viewport.scale = Math.min(3.5, Math.max(0.45, viewport.scale * factor));
       viewport.offsetX = point.x - beforeX * viewport.scale;
       viewport.offsetY = point.y - beforeY * viewport.scale;
+      disableAutoFit();
       render();
     }, { passive: false });
     canvas.addEventListener("mousedown", (event) => {
-      viewport.dragging = true;
-      viewport.lastX = event.clientX;
-      viewport.lastY = event.clientY;
-      canvas.classList.add("dragging");
+      if (event.button === 1) {
+        event.preventDefault();
+        viewport.interaction = "pan";
+        viewport.lastX = event.clientX;
+        viewport.lastY = event.clientY;
+        canvas.classList.add("dragging");
+      } else if (event.button === 0) {
+        viewport.interaction = "select";
+        viewport.selectionStart = canvasPoint(event);
+        viewport.selectionEnd = viewport.selectionStart;
+        render();
+      }
+    });
+    canvas.addEventListener("dblclick", (event) => {
+      if (event.button !== 0) return;
+      resetViewport();
+    });
+    canvas.addEventListener("auxclick", (event) => {
+      if (event.button === 1) event.preventDefault();
     });
     window.addEventListener("mousemove", (event) => {
-      if (!viewport.dragging) return;
-      viewport.offsetX += event.clientX - viewport.lastX;
-      viewport.offsetY += event.clientY - viewport.lastY;
-      viewport.lastX = event.clientX;
-      viewport.lastY = event.clientY;
-      render();
+      if (viewport.interaction === "pan") {
+        viewport.offsetX += event.clientX - viewport.lastX;
+        viewport.offsetY += event.clientY - viewport.lastY;
+        viewport.lastX = event.clientX;
+        viewport.lastY = event.clientY;
+        disableAutoFit();
+        render();
+      } else if (viewport.interaction === "select") {
+        viewport.selectionEnd = canvasPoint(event);
+        render();
+      }
     });
     window.addEventListener("mouseup", () => {
-      viewport.dragging = false;
+      if (viewport.interaction === "select") {
+        zoomToSelection();
+      }
+      viewport.interaction = null;
+      viewport.selectionStart = null;
+      viewport.selectionEnd = null;
       canvas.classList.remove("dragging");
+      render();
     });
     speedInput.addEventListener("input", () => {
       state.speed = Number(speedInput.value);
