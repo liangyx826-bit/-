@@ -1,0 +1,117 @@
+<mxfile host="app.diagrams.net" modified="2026-06-15T00:00:00.000Z" agent="Codex" version="24.7.17">
+  <diagram name="仿真控制状态机" id="sim-control-state-machine">
+    <mxGraphModel dx="1160" dy="640" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1060" pageHeight="500" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="start" value="" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1f2937;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="46" y="76" width="18" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="unloaded" value="UNLOADED&#xa;未加载配置" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#edf6ff;strokeColor=#5b8ec1;fontColor=#1f2937;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="50" width="150" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="ready" value="READY&#xa;已初始化" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#eaf8f1;strokeColor=#4f9d73;fontColor=#1f2937;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="50" width="150" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="running" value="RUNNING&#xa;正在推进" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#eef4ff;strokeColor=#4f72c9;fontColor=#1f2937;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="520" y="50" width="150" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="paused" value="PAUSED&#xa;暂停 / 可单步" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#fff7df;strokeColor=#d69a2d;fontColor=#1f2937;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="730" y="50" width="150" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="finished" value="FINISHED&#xa;达到结束时间" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#f2f4f8;strokeColor=#728197;fontColor=#1f2937;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="520" y="250" width="150" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="end" value="" style="ellipse;shape=doubleEllipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#1f2937;strokeColor=#1f2937;" vertex="1" parent="1">
+          <mxGeometry x="978" y="173" width="24" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="note" value="load_config() 失败不触发状态迁移；只返回 ERR_CONFIG_NOT_FOUND / ERR_CONFIG_INVALID。&#xa;reset() 可从 READY / RUNNING / PAUSED / FINISHED 回到 READY。&#xa;运行期异常场景不进入本状态机，后续单独设计。" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#f8fafc;strokeColor=#cbd5e1;fontColor=#475569;align=left;spacing=12;" vertex="1" parent="1">
+          <mxGeometry x="100" y="384" width="740" height="78" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#374151;" edge="1" parent="1" source="start" target="unloaded">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="load_config ok" style="endArrow=block;html=1;rounded=0;strokeColor=#374151;fontColor=#374151;" edge="1" parent="1" source="unloaded" target="ready">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="start" style="endArrow=block;html=1;rounded=0;strokeColor=#374151;fontColor=#374151;" edge="1" parent="1" source="ready" target="running">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="pause" style="endArrow=block;html=1;rounded=0;strokeColor=#374151;fontColor=#374151;" edge="1" parent="1" source="running" target="paused">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="700" y="76"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="start" style="endArrow=block;html=1;rounded=0;strokeColor=#374151;fontColor=#374151;" edge="1" parent="1" source="paused" target="running">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="700" y="104"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="step" style="endArrow=block;html=1;rounded=0;strokeColor=#374151;fontColor=#374151;" edge="1" parent="1" source="ready" target="paused">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="385" y="24"/>
+              <mxPoint x="805" y="24"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="step" style="endArrow=block;html=1;rounded=1;strokeColor=#374151;fontColor=#374151;" edge="1" parent="1" source="paused" target="paused">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="900" y="145"/>
+              <mxPoint x="805" y="145"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="time &gt;= duration" style="endArrow=block;html=1;rounded=0;strokeColor=#374151;fontColor=#374151;" edge="1" parent="1" source="running" target="finished">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" value="step reaches duration" style="endArrow=block;html=1;rounded=0;strokeColor=#374151;fontColor=#374151;" edge="1" parent="1" source="paused" target="finished">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="805" y="184"/>
+              <mxPoint x="670" y="184"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e9" value="reset" style="endArrow=block;html=1;rounded=0;strokeColor=#374151;fontColor=#374151;" edge="1" parent="1" source="finished" target="ready">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="520" y="285"/>
+              <mxPoint x="385" y="285"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e10" value="close" style="endArrow=block;html=1;rounded=0;dashed=1;strokeColor=#6b7280;fontColor=#6b7280;" edge="1" parent="1" source="ready" target="end">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="940" y="85"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e11" value="close" style="endArrow=block;html=1;rounded=0;dashed=1;strokeColor=#6b7280;fontColor=#6b7280;" edge="1" parent="1" source="running" target="end">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="940" y="85"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e12" value="close" style="endArrow=block;html=1;rounded=0;dashed=1;strokeColor=#6b7280;fontColor=#6b7280;" edge="1" parent="1" source="paused" target="end">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e13" value="close" style="endArrow=block;html=1;rounded=0;dashed=1;strokeColor=#6b7280;fontColor=#6b7280;" edge="1" parent="1" source="finished" target="end">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="670" y="285"/>
+              <mxPoint x="940" y="285"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -27,38 +27,11 @@ UI、CLI、批量脚本都只面向仿真控制，不直接调用协调算法、
 - 不持有 UI 控件对象，不依赖 PySide6；UI 通过回调、信号适配器或轮询方式消费快照。
 - 不负责离线分析和报告生成，只负责按日志接口落盘关键数据。
 
-## 4. 与 UI 的接口对齐
-
-UI HLD 中的用户操作统一映射到仿真控制应用层接口：
-
-| UI 操作 | 仿真控制接口 | 说明 |
-| --- | --- | --- |
-| 选择配置文件 | `load_config(path)` | 解析、校验并保存配置，返回命令执行结果 |
-| 开始 / 继续 | `start()` | 从 `READY` 或 `PAUSED` 进入运行；`PAUSED` 下语义为继续 |
-| 暂停 | `pause()` | 从 `RUNNING` 进入 `PAUSED` |
-| 单步 | `step(count=1)` | 通常在 `READY` / `PAUSED` 下推进指定步数 |
-| 重置 | `reset()` | 回到当前配置的初始状态 |
-| 注入扰动 | `inject_disturbance(command)` | 转发动态扰动命令给加扰模块 |
-| 订阅实时数据 | `subscribe_snapshot(callback)` | 仿真控制按节拍推送 `SimulationSnapshot` |
-| 打开日志 | `get_recent_events(limit)` | UI 日志面板按需读取最近事件 |
-| 修改播放倍率 | `set_playback_rate(rate)` | 只影响 wall-clock 推进频率，不改变仿真步长 |
-
-接口原则：
-
-- UI 不直接写仿真状态；所有状态变化都通过命令接口完成。
-- UI 显示字段完全来自 `SimulationSnapshot`，不拼装跨模块内部数据。
-- 配置属于输入；实时快照只表达运行输出，不携带配置摘要。
-- 播放倍率是运行调度参数，通过 `set_playback_rate(rate)` 设置，不进入实时快照。
-- 渐隐轨迹属于 UI 显示缓存，UI 根据连续 `SimulationSnapshot` 自行维护；保留窗口按仿真时间计算，不随播放倍率变化。
-- 窗口关闭或 CLI 退出时调用 `close()` 释放资源，不单独设计 `stop()`。
-- “继续”不单独设计 `resume()`，统一使用 `start()`。
-- UI 可以缓存事件用于显示，但事件源和最近事件环形缓冲由仿真控制维护，保证后台模块事件、错误事件和日志面板晚打开时的历史事件不会丢失。
-
-## 5. 应用层数据类型
+## 4. 应用层数据契约
 
 以下类型为 HLD 级接口契约，代码实现可使用 `dataclass`、`TypedDict` 或 Pydantic 等方式承载。
 
-### 5.1 枚举
+### 4.1 枚举
 
 ```python
 RunState = Literal[
@@ -67,7 +40,6 @@ RunState = Literal[
     "RUNNING",    # 正在按节拍推进
     "PAUSED",     # 暂停，可单步
     "FINISHED",   # 达到仿真结束时间
-    "ERROR",      # 发生不可恢复错误
 ]
 
 ControlReport = Literal[
@@ -95,7 +67,7 @@ ResultCode = Literal[
 ]
 ```
 
-### 5.2 节点状态
+### 4.2 节点状态
 
 结构体名：`NodeState`
 
@@ -112,7 +84,7 @@ ResultCode = Literal[
 | `cross_track_error_m` | `float` | 侧偏 |
 | `distance_to_go_m` | `float` | 待飞距 |
 
-### 5.3 链路状态
+### 4.3 链路状态
 
 结构体名：`LinkState`
 
@@ -130,7 +102,7 @@ ResultCode = Literal[
 - `simplex` 表示链路方向按 `link_id` 的源节点到目标节点解释；反向链路需要单独一条 `link_id`。
 - 当前阶段不设计带宽字段。
 
-### 5.4 仿真快照
+### 4.4 仿真快照
 
 结构体名：`SimulationSnapshot`
 
@@ -146,7 +118,7 @@ ResultCode = Literal[
 | `nodes` | `list[NodeState]` | 节点状态 |
 | `links` | `list[LinkState]` | 链路状态 |
 
-### 5.5 事件
+### 4.5 事件
 
 结构体名：`SimulationEvent`
 
@@ -159,7 +131,7 @@ ResultCode = Literal[
 | `source` | `str` | 事件来源，如 `SimControl`、`Disturbance` |
 | `message` | `str` | 给日志窗口展示的文本 |
 
-### 5.6 命令结果
+### 4.6 命令结果
 
 结构体名：`CommandResult`
 
@@ -170,9 +142,36 @@ ResultCode = Literal[
 | `code` | `ResultCode` | `OK` 或错误码 |
 | `message` | `str` | 面向 UI / CLI 的短消息 |
 
-## 6. 对 UI / CLI 暴露的细化接口
+## 5. 应用层接口契约
 
-### 6.1 创建控制器
+### 5.1 接口总览
+
+UI HLD 中的用户操作统一映射到仿真控制应用层接口：
+
+| UI 操作 | 仿真控制接口 | 说明 |
+| --- | --- | --- |
+| 选择配置文件 | `load_config(path)` | 解析、校验并保存配置，返回命令执行结果 |
+| 开始 / 继续 | `start()` | 从 `READY` 或 `PAUSED` 进入运行；`PAUSED` 下语义为继续 |
+| 暂停 | `pause()` | 从 `RUNNING` 进入 `PAUSED` |
+| 单步 | `step(count=1)` | 通常在 `READY` / `PAUSED` 下推进指定步数 |
+| 重置 | `reset()` | 回到当前配置的初始状态 |
+| 注入扰动 | `inject_disturbance(command)` | 转发动态扰动命令给加扰模块 |
+| 订阅实时数据 | `subscribe_snapshot(callback)` | 仿真控制按节拍推送 `SimulationSnapshot` |
+| 打开日志 | `get_recent_events(limit)` | UI 日志面板按需读取最近事件 |
+| 修改播放倍率 | `set_playback_rate(rate)` | 只影响 wall-clock 推进频率，不改变仿真步长 |
+
+接口原则：
+
+- UI 不直接写仿真状态；所有状态变化都通过命令接口完成。
+- UI 显示字段完全来自 `SimulationSnapshot`，不拼装跨模块内部数据。
+- 配置属于输入；实时快照只表达运行输出，不携带配置摘要。
+- 播放倍率是运行调度参数，通过 `set_playback_rate(rate)` 设置，不进入实时快照。
+- 渐隐轨迹属于 UI 显示缓存，UI 根据连续 `SimulationSnapshot` 自行维护；保留窗口按仿真时间计算，不随播放倍率变化。
+- 窗口关闭或 CLI 退出时调用 `close()` 释放资源，不单独设计 `stop()`。
+- “继续”不单独设计 `resume()`，统一使用 `start()`。
+- UI 可以缓存事件用于显示，但事件源和最近事件环形缓冲由仿真控制维护，保证后台模块事件、错误事件和日志面板晚打开时的历史事件不会丢失。
+
+### 5.2 创建控制器
 
 ```python
 controller = SimulationController()
@@ -180,7 +179,7 @@ controller = SimulationController()
 
 创建后状态为 `UNLOADED`。构造函数不读取配置、不启动线程、不 import GUI。
 
-### 6.2 加载配置
+### 5.3 加载配置
 
 ```python
 def load_config(path: str) -> CommandResult
@@ -198,7 +197,7 @@ def load_config(path: str) -> CommandResult
 - 当前处于 `RUNNING` 时返回 `ERR_BUSY`；用户需要先 `pause()` 或 `reset()`。
 - 配置加载失败时状态保持原值；若没有可用旧配置，则保持 `UNLOADED`。
 
-### 6.3 获取当前快照
+### 5.4 获取当前快照
 
 ```python
 def get_snapshot() -> SimulationSnapshot
@@ -210,7 +209,7 @@ def get_snapshot() -> SimulationSnapshot
 - 不推进仿真，不改变状态。
 - 若未加载配置，返回 `UNLOADED` 快照或抛出实现约定的 `SimulationError`；建议返回快照，便于 UI 初始化。
 
-### 6.4 开始 / 继续
+### 5.5 开始 / 继续
 
 ```python
 def start() -> CommandResult
@@ -218,16 +217,16 @@ def start() -> CommandResult
 
 语义：
 
-- `READY` / `FINISHED`：从当前配置的初始状态开始或重新开始。
+- `READY`：从当前配置的初始状态开始运行。
 - `PAUSED`：继续运行。
 - `RUNNING`：幂等返回 `OK`，不重复启动循环。
 
 约束：
 
 - 未加载配置返回 `ERR_NO_CONFIG`。
-- 若上一次为 `ERROR`，需要先 `reset()` 或重新 `load_config()`。
+- `FINISHED` 下返回 `ERR_INVALID_STATE`；用户需要先 `reset()`，再 `start()`。
 
-### 6.5 暂停
+### 5.6 暂停
 
 ```python
 def pause() -> CommandResult
@@ -240,9 +239,9 @@ def pause() -> CommandResult
 
 约束：
 
-- `READY`、`FINISHED` 下返回 `ERR_INVALID_STATE` 或幂等保持，具体实现固定一种策略；建议返回 `ERR_INVALID_STATE`，便于 UI 暴露状态问题。
+- `READY`、`FINISHED` 下返回 `ERR_INVALID_STATE`。
 
-### 6.6 单步
+### 5.7 单步
 
 ```python
 def step(count: int = 1) -> CommandResult
@@ -259,7 +258,7 @@ def step(count: int = 1) -> CommandResult
 - `count >= 1`。
 - `RUNNING` 下返回 `ERR_INVALID_STATE`，避免并发推进。
 
-### 6.7 重置
+### 5.8 重置
 
 ```python
 def reset() -> CommandResult
@@ -277,7 +276,7 @@ def reset() -> CommandResult
 - 未加载配置返回 `ERR_NO_CONFIG`。
 - 不删除已落盘日志文件；是否新建 run 目录由日志配置决定。
 
-### 6.8 关闭
+### 5.9 关闭
 
 ```python
 def close() -> None
@@ -292,7 +291,7 @@ def close() -> None
 - 供 UI 窗口关闭、CLI 退出、批量任务取消或测试清理时调用。
 - 调用后 controller 实例不再复用；需要重新创建实例才能再次运行。
 
-### 6.9 设置播放倍率
+### 5.10 设置播放倍率
 
 ```python
 def set_playback_rate(rate: float) -> CommandResult
@@ -304,7 +303,7 @@ def set_playback_rate(rate: float) -> CommandResult
 - 合法范围 `0.1 <= rate <= 10.0`。
 - 不改变 `step_s`，不改变算法输入语义。
 
-### 6.10 注入扰动
+### 5.11 注入扰动
 
 ```python
 def inject_disturbance(command: DisturbanceCommand) -> CommandResult
@@ -338,7 +337,7 @@ def inject_disturbance(command: DisturbanceCommand) -> CommandResult
 - 未加载配置返回 `ERR_NO_CONFIG`。
 - `FINISHED` 下不接受新增扰动，返回 `ERR_INVALID_STATE`。
 
-### 6.11 订阅快照
+### 5.12 订阅快照
 
 ```python
 def subscribe_snapshot(callback: Callable[[SimulationSnapshot], None]) -> Subscription
@@ -353,7 +352,7 @@ class Subscription:
 
 语义：
 
-- 仿真控制每次生成新快照后调用订阅者。
+- 仿真控制按显示回显刷新节拍调用订阅者，首版默认 `10 Hz`。
 - 回调必须是短耗时函数；UI 线程适配由 UI 层负责。
 - 同一个订阅者多次订阅时，建议返回同一订阅或替换旧订阅，避免重复刷新。
 
@@ -362,7 +361,7 @@ class Subscription:
 - 回调异常不能打断仿真循环；仿真控制记录 `WARN` 事件并继续。
 - 订阅回调中不允许重入调用 `step()`、`reset()` 等改变状态的接口；实现需要加锁或排队。
 
-### 6.12 读取最近事件
+### 5.13 读取最近事件
 
 ```python
 def get_recent_events(limit: int = 200, min_level: EventLevel | None = None) -> list[SimulationEvent]
@@ -374,7 +373,7 @@ def get_recent_events(limit: int = 200, min_level: EventLevel | None = None) -> 
 - 返回内存环形缓冲中的最近事件，不直接扫描 HDF5 或大日志文件。
 - UI 可以自己缓存已经收到的事件，但不能作为唯一事件源；仿真控制仍需维护最近事件，覆盖 UI 面板晚打开、UI 刷新丢帧、headless 运行和内部错误追踪等场景。
 
-### 6.13 headless 运行
+### 5.14 headless 运行
 
 ```python
 def run_until_complete(config: object | str, *, seed: int | None = None) -> CommandResult
@@ -384,7 +383,7 @@ def run_until_complete(config: object | str, *, seed: int | None = None) -> Comm
 
 - 给 CLI / 批量仿真使用。
 - 若传入路径，内部执行 `load_config(path)`。
-- 从 `READY` 运行到 `FINISHED` 或 `ERROR`。
+- 从 `READY` 运行到 `FINISHED`；异常场景另行设计。
 - 过程中按日志配置落盘；可以不启用快照订阅。
 
 约束：
@@ -392,67 +391,61 @@ def run_until_complete(config: object | str, *, seed: int | None = None) -> Comm
 - 不依赖 UI 事件循环。
 - 可被多进程批量脚本并发调用；单个 controller 实例不支持并发运行多个 run。
 
-## 7. 状态机
+## 6. 状态机
 
-```mermaid
-stateDiagram-v2
-    [*] --> UNLOADED
-    UNLOADED --> READY: load_config ok
-    READY --> RUNNING: start
-    READY --> PAUSED: step
-    RUNNING --> PAUSED: pause
-    PAUSED --> RUNNING: start
-    PAUSED --> PAUSED: step
-    RUNNING --> FINISHED: time >= duration
-    PAUSED --> FINISHED: step reaches duration
-    FINISHED --> READY: reset
-    ERROR --> READY: reset
-    READY --> [*]: close
-    RUNNING --> [*]: close
-    PAUSED --> [*]: close
-    FINISHED --> [*]: close
-    ERROR --> [*]: close
-```
+![仿真控制状态机](assets/仿真控制状态机.svg)
+
+> 图源：[`仿真控制状态机.drawio`](assets/仿真控制状态机.drawio)
 
 `load_config()` 失败不触发状态迁移，只通过 `CommandResult.code` 返回 `ERR_CONFIG_NOT_FOUND`、`ERR_CONFIG_INVALID` 等错误码。
 
+`reset()` 可从 `READY`、`RUNNING`、`PAUSED`、`FINISHED` 回到 `READY`，语义见 5.8。
+
 非法状态转换必须返回 `CommandResult(code="ERR_INVALID_STATE")`，不得静默执行不确定行为。
 
-## 8. Tick 主循环接口
+运行期异常场景不进入本状态机，后续单独设计。
 
-仿真控制内部每个仿真步执行一次 `_tick()`，对外不暴露。
+## 7. 多速率调度
 
 ```python
 def _tick() -> SimulationSnapshot
 ```
 
-推荐时序：
+仿真控制内部以固定基础步长推进仿真时间。首版基础 tick 为 `200 Hz`，不同模块不强制每个基础 tick 都执行，而是由调度器按各自频率触发。
 
-1. 读取当前模型状态。
-2. 从通信功能读取各节点 Inbox。
-3. 运行协调算法，可选。
-4. 运行每个节点算法，生成控制量和 Outbox。
-5. 将 Outbox 写入通信功能。
-6. 调用通信功能 `tick(step_s)` 推进链路队列、延迟和丢包。
-7. 将控制量写入模型迭代。
-8. 调用加扰 `tick(time_s, step_s)`，由加扰 push 动态扰动到模型 / 通信。
-9. 调用模型迭代 `step(step_s)` 推进动力学。
-10. 更新时间、运行状态和控制回报。
-11. 按日志节拍写关键数据。
-12. 生成 `SimulationSnapshot` 并通知订阅者。
+本节只描述仿真控制内部推进和显示回显刷新，不描述 UI 到仿真控制的命令调用。`load_config()`、`start()`、`pause()`、`step()`、`reset()`、`set_playback_rate()`、`inject_disturbance()`、`close()` 均为事件触发接口，不进入定时调度表。
+
+首版默认调度如下：
+
+| 顺序 | 调度块 | 默认频率 | 时间基准 | 触发条件 | 动作 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 编队算法 | `20 Hz` | sim-time | 每 10 个基础 tick | 读取当前模型状态；<br />从通信功能读取各节点 Inbox；<br />运行各节点编队算法；<br />生成控制量和 Outbox；<br />未触发时沿用上一帧控制量，不产生新的 Outbox |
+| 2 | 通信功能 | `100 Hz` | sim-time | 每 2 个基础 tick | 接收编队算法新产生的 Outbox；<br />调用通信功能 `tick(dt_s)`；<br />推进在途消息、延迟和丢包；<br />更新各节点 Inbox |
+| 3 | 模型功能 | `200 Hz` | sim-time | 每个基础 tick | 将当前有效控制量写入模型；<br />调用加扰 `tick(time_s, dt_s)` 并把动态扰动写入模型 / 通信；<br />调用模型迭代 `step(step_s)` 推进动力学；<br />更新时间、运行状态和控制回报 |
+| 4 | 关键数据落盘 | `20 Hz` | sim-time | 每 10 个基础 tick | 写关键数据 |
+| 5 | 快照生成 | `100 Hz` | sim-time | 每 2 个基础 tick | 生成最新 `SimulationSnapshot`，供 `get_snapshot()` 返回 |
+| 6 | 显示回显刷新 | `10 Hz` | wall-clock | wall-clock 节流命中时 | 更新可供 UI 读取的最近快照；若启用订阅，则通知订阅者 |
+
+频率约束：
+
+- 各 sim-time 频率必须能被基础仿真 tick 整除，避免分数 tick 调度。
+- 显示回显刷新按 wall-clock 节流，不随 `playback_rate` 增大而提高刷新频率。
+- `playback_rate` 只影响 wall-clock 调度间隔，不改变任何 sim-time 频率。
+- 若某调度块本次未触发，应复用上一次有效输出，例如控制量保持；消息类输出不重复生成。
+- 频率可配置，但默认值先按上表实现。
 
 时序约束：
 
-- 同一 tick 内算法读取的是本步开始时的模型 / 通信状态。
+- 同一基础 tick 内算法读取的是本步开始时的模型 / 通信状态。
 - 模型迭代在算法输出和扰动处理之后推进。
 - 通信功能只理解消息 envelope，不理解 payload 内算法语义。
 - 加扰是动态扰动进入模型 / 通信的唯一通道。
 
-## 9. 对内模块接口
+## 8. 对内模块接口
 
 本节定义仿真控制期望其他模块提供的最小接口，用于后续各模块 LLD / 实现对齐。
 
-### 9.1 配置加载
+### 8.1 配置加载
 
 ```python
 class ConfigLoader:
@@ -460,7 +453,7 @@ class ConfigLoader:
     def validate(config: dict[str, object]) -> None: ...
 ```
 
-### 9.2 模型迭代
+### 8.2 模型迭代
 
 ```python
 class ModelEngine:
@@ -479,7 +472,7 @@ def inject_wind(command: object) -> None: ...
 def inject_fault(command: object) -> None: ...
 ```
 
-### 9.3 通信功能
+### 8.3 通信功能
 
 ```python
 class CommunicationEngine:
@@ -499,7 +492,7 @@ def inject_link_fault(command: object) -> None: ...
 def inject_link_qos(command: object) -> None: ...
 ```
 
-### 9.4 协调算法
+### 8.4 协调算法
 
 协调算法可选，未配置时仿真控制跳过。
 
@@ -511,7 +504,7 @@ class CoordinationAlgorithm:
     def close() -> None: ...
 ```
 
-### 9.5 节点算法
+### 8.5 节点算法
 
 ```python
 class NodeAlgorithm:
@@ -528,7 +521,7 @@ class NodeAlgorithm:
 - `outbox`: 本节点要发送的消息。
 - `status`: 算法状态摘要，供日志和控制回报使用。
 
-### 9.6 加扰
+### 8.6 加扰
 
 ```python
 class DisturbanceEngine:
@@ -540,7 +533,7 @@ class DisturbanceEngine:
     def close() -> None: ...
 ```
 
-### 9.7 关键数据日志
+### 8.7 关键数据日志
 
 ```python
 class DataLogger:
@@ -554,9 +547,9 @@ class DataLogger:
 日志写入失败策略：
 
 - 非关键实时快照写失败：记录 `WARN`，仿真可继续。
-- run 元数据、配置、最终指标写失败：进入 `ERROR`。
+- run 元数据、配置、最终指标写失败：按异常场景处理，后续单独设计。
 
-## 10. 错误码
+## 9. 错误码
 
 `ResultCode` 的语义如下：
 
@@ -574,22 +567,23 @@ class DataLogger:
 | `ERR_LOG_FAILED` | 关键日志写入失败 |
 | `ERR_INTERNAL` | 未分类内部错误 |
 
-## 11. 线程与时间策略
+## 10. 线程与时间策略
 
 - 仿真控制核心逻辑按单线程状态机设计，先保证确定性。
-- UI 模式下可以由 UI 定时器调用 `step()` 或由仿真控制内部定时器驱动；无论采用哪种实现，外部接口语义不变。
+- UI 只调用事件触发的命令接口并消费回显快照；运行态推进由仿真控制的调度器触发内部 `_tick()`。
+- 公共 `step()` 只用于暂停态 / 准备态下的人工单步。
 - headless 模式使用同步循环，不依赖 GUI event loop。
 - 后续若引入后台线程，所有命令接口必须串行化进入仿真控制事件队列，避免 UI 线程和仿真线程同时修改状态。
-- `step_s` 是仿真时间步长；`playback_rate` 决定 wall-clock 调度间隔：`wall_interval_s = step_s / playback_rate`。
+- `step_s` 是基础 tick 的仿真时间步长；`playback_rate` 决定 wall-clock 调度间隔：`wall_interval_s = step_s / playback_rate`。
 
-## 12. 快照生成策略
+## 11. 快照生成策略
 
-- UI 刷新快照可以低于仿真 tick 频率，例如每 `0.05s` wall-clock 或每 N 个 tick 推送一次。
+- UI 刷新快照可以低于仿真 tick 频率，首版默认每 `0.1s` wall-clock 或每 N 个 tick 推送一次。
 - 日志快照按日志配置节拍写入，不必等同 UI 刷新节拍。
 - 渐隐轨迹缓存由 UI 根据连续快照维护；仿真控制快照只携带当前时刻节点状态。
 - 快照对象生成后应视为不可变，避免 UI 渲染过程中被后台修改。
 
-## 13. 后续实现顺序
+## 12. 后续实现顺序
 
 1. 实现 `SimulationController` 状态机和 `CommandResult` / `SimulationSnapshot` 数据结构。
 2. 接入配置加载，完成 `load_config()` 到 `READY` 的闭环。
@@ -597,7 +591,7 @@ class DataLogger:
 4. 将 PySide6 UI 的 `MockSimulation` 替换为 `SimulationController` 适配器。
 5. 接入通信功能、加扰和关键数据日志。
 
-## 14. 关联代码
+## 13. 关联代码
 
 - `src/runner/sim_control.py`
 - `src/ui/gui/main_window.py`
