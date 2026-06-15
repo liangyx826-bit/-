@@ -9,7 +9,7 @@ CLI 是人机交互组的 Boundary，面向 headless 单进程仿真和脚本层
 - 解析 `--config`、`--seed`、`--output`、`--headless` 等命令行参数。
 - 加载基础配置文件。
 - 将命令行参数覆盖到配置对象。
-- 调用 `仿真控制.start(config)`。
+- 调用 `仿真控制.run_until_complete(config)`。
 - 将进程退出码反馈给外层脚本。
 - 支持 bat / shell / GNU parallel / xargs 等脚本层批量启动。
 
@@ -24,7 +24,7 @@ CLI 是人机交互组的 Boundary，面向 headless 单进程仿真和脚本层
 
 - 参数解析：命令行参数、默认值、必填项校验
 - 配置覆盖：seed、output、headless 等 CLI 覆盖
-- 运行入口：调用仿真控制 `start(config)`
+- 运行入口：调用仿真控制 `run_until_complete(config)`
 - 进程反馈：退出码、错误摘要
 
 ## 5. 关联代码
@@ -32,4 +32,3 @@ CLI 是人机交互组的 Boundary，面向 headless 单进程仿真和脚本层
 - `src/ui/cli/`
 - `src/main.py`
 - `src/runner/sim_control.py`
-
