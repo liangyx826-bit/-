@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from configparser import ConfigParser
 import math
+import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
@@ -41,6 +44,23 @@ from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 WORLD_WIDTH = 1600.0
 WORLD_HEIGHT = 520.0
 TRAIL_SECONDS = 18.0
+APP_CONFIG_SECTION = "config"
+APP_CONFIG_KEY_LAST_CONFIG = "last_config"
+APP_CONFIG_FILE_NAME = "config.ini"
+
+
+def default_project_root() -> Path:
+    """Return the directory used for app-relative user settings."""
+
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+
+    source_root = Path(__file__).resolve().parents[3]
+    cwd = Path.cwd().resolve()
+    for candidate in (cwd, cwd.parent, source_root):
+        if (candidate / "configs").exists():
+            return candidate
+    return cwd
 
 
 @dataclass
@@ -1111,8 +1131,20 @@ class StageFullscreenDialog(QDialog):
 class MainWindow(QMainWindow):
     """Main PySide6 UI shell."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        project_root: Path | str | None = None,
+        config_state_path: Path | str | None = None,
+        auto_load_config: bool = True,
+    ) -> None:
         super().__init__()
+        self.project_root = Path(project_root).resolve() if project_root is not None else default_project_root()
+        if config_state_path is None:
+            self.config_state_path = self.project_root / APP_CONFIG_FILE_NAME
+        else:
+            state_path = Path(config_state_path)
+            self.config_state_path = state_path if state_path.is_absolute() else self.project_root / state_path
         self.setWindowTitle("编队仿真")
         self.resize(1440, 900)
         self.setMinimumSize(1280, 780)
@@ -1136,6 +1168,8 @@ class MainWindow(QMainWindow):
         self._apply_theme()
         self._update_snapshot(self.sim.snapshot())
         self._log("SimControl", "初始化界面，等待加载配置")
+        if auto_load_config:
+            self._load_last_config_from_state()
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -1195,6 +1229,7 @@ class MainWindow(QMainWindow):
         form.setHorizontalSpacing(8)
         form.setVerticalSpacing(8)
         self.config_name = QLabel("未选择")
+        self.config_name.setWordWrap(True)
         choose_config = QPushButton("选择文件")
         choose_config.clicked.connect(self._choose_config)
         self.scenario_select = SelectButton(132, popup_side="right")
@@ -1612,19 +1647,88 @@ class MainWindow(QMainWindow):
         self._log("Disturb", f"{messages[kind]} -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _choose_config(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "选择配置文件", str(Path.cwd()), "Config (*.yaml *.yml *.json)")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择配置文件",
+            str(self._config_dialog_start_dir()),
+            "Config (*.yaml *.yml *.json)",
+        )
         if not path:
             return
         self._apply_config_path(path)
 
-    def _apply_config_path(self, path: str) -> None:
+    def _apply_config_path(self, path: str, *, remember: bool = True) -> None:
         self.timer.stop()
         self._update_snapshot(self.sim.load_config(path))
         if self.sim.last_result_code == "OK":
-            self.config_name.setText(Path(path).name)
-            self._log("Config", f"加载配置文件 {Path(path).name}")
+            display_path = self._display_config_path(Path(path))
+            self.config_name.setText(display_path)
+            self.config_name.setToolTip(display_path)
+            self._log("Config", f"加载配置文件 {display_path}")
+            if remember:
+                self._save_last_config_path(Path(path))
         else:
             self._log("WARN", f"加载配置失败 {Path(path).name}: {self.sim.last_result_message}")
+
+    def _config_dialog_start_dir(self) -> Path:
+        relative_path = self._read_last_config_path()
+        if relative_path is None:
+            return self.project_root
+        config_path = (self.project_root / relative_path).resolve()
+        candidate = config_path.parent
+        return candidate if candidate.exists() else self.project_root
+
+    def _display_config_path(self, path: Path) -> str:
+        relative_path = self._relative_to_project_root(path)
+        return relative_path if relative_path is not None else path.name
+
+    def _load_last_config_from_state(self) -> None:
+        relative_path = self._read_last_config_path()
+        if relative_path is None:
+            return
+        config_path = (self.project_root / relative_path).resolve()
+        if not config_path.exists():
+            self._log("WARN", f"config.ini 指向的配置不存在：{relative_path}")
+            return
+        self._apply_config_path(str(config_path), remember=False)
+
+    def _read_last_config_path(self) -> str | None:
+        if not self.config_state_path.exists():
+            return None
+        parser = ConfigParser()
+        try:
+            parser.read(self.config_state_path, encoding="utf-8")
+        except OSError as exc:
+            self._log("WARN", f"读取 config.ini 失败：{exc}")
+            return None
+        value = parser.get(APP_CONFIG_SECTION, APP_CONFIG_KEY_LAST_CONFIG, fallback="").strip()
+        return value or None
+
+    def _save_last_config_path(self, path: Path) -> None:
+        relative_path = self._relative_to_project_root(path)
+        if relative_path is None:
+            self._log("WARN", "配置路径无法相对到程序目录，未更新 config.ini")
+            return
+        parser = ConfigParser()
+        parser[APP_CONFIG_SECTION] = {APP_CONFIG_KEY_LAST_CONFIG: relative_path}
+        self.config_state_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with self.config_state_path.open("w", encoding="utf-8") as handle:
+                parser.write(handle)
+        except OSError as exc:
+            self._log("WARN", f"写入 config.ini 失败：{exc}")
+
+    def _relative_to_project_root(self, path: Path) -> str | None:
+        try:
+            relative_path = os.path.relpath(path.resolve(), self.project_root)
+        except ValueError:
+            return None
+        if os.path.isabs(relative_path):
+            return None
+        try:
+            return Path(relative_path).as_posix()
+        except ValueError:
+            return None
 
     def _on_speed_changed(self, value: int) -> None:
         speed = value / 10.0

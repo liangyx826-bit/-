@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import time
 import unittest
+from configparser import ConfigParser
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication
 
-from src.ui.gui.main_window import ControllerSimulationAdapter, MainWindow
+from src.ui.gui.main_window import ControllerSimulationAdapter, MainWindow, default_project_root
 
 
 class GuiViewInteractionTests(unittest.TestCase):
@@ -27,7 +30,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self) -> None:
-        self.window = MainWindow()
+        self.window = MainWindow(auto_load_config=False)
         self.window.resize(1440, 900)
         self.window.show()
         self.app.processEvents()
@@ -179,6 +182,189 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.config_name.text(), old_label)
         self.assertIn("加载配置失败", self.window.log_dialog.text.toPlainText())
 
+    def test_startup_loads_last_relative_config_from_ini(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            config_path = self._write_config_file(project_root / "configs" / "startup.json")
+            state_path = project_root / "config.ini"
+            state_path.write_text("[config]\nlast_config = configs/startup.json\n", encoding="utf-8")
+
+            window = MainWindow(project_root=project_root, config_state_path=state_path)
+            window.show()
+            self.app.processEvents()
+            try:
+                self.assertEqual(window.sim.controller.get_snapshot().run_state, "READY")
+                self.assertEqual(window.config_name.text(), "configs/startup.json")
+                self.assertEqual(window.node_table.rowCount(), 3)
+            finally:
+                window.close()
+                self.app.processEvents()
+
+    def test_packaged_startup_loads_config_ini_next_to_exe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app_dir = Path(tmp)
+            config_path = self._write_config_file(app_dir / "configs" / "packaged.json")
+            state_path = app_dir / "config.ini"
+            state_path.write_text("[config]\nlast_config = configs/packaged.json\n", encoding="utf-8")
+
+            with (
+                patch.object(sys, "frozen", True, create=True),
+                patch.object(sys, "executable", str(app_dir / "编队仿真.exe")),
+            ):
+                self.assertEqual(default_project_root(), app_dir)
+                window = MainWindow()
+            window.show()
+            self.app.processEvents()
+            try:
+                self.assertEqual(window.config_state_path, state_path)
+                self.assertEqual(window.sim.controller.get_snapshot().run_state, "READY")
+                self.assertEqual(window.config_name.text(), "configs/packaged.json")
+            finally:
+                window.close()
+                self.app.processEvents()
+
+    def test_packaged_config_write_is_relative_to_exe_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app_dir = Path(tmp)
+            selected_config = self._write_config_file(app_dir / "configs" / "selected.json")
+            state_path = app_dir / "config.ini"
+
+            with (
+                patch.object(sys, "frozen", True, create=True),
+                patch.object(sys, "executable", str(app_dir / "编队仿真.exe")),
+            ):
+                window = MainWindow(auto_load_config=False)
+            window._apply_config_path(str(selected_config))
+            try:
+                parser = ConfigParser()
+                parser.read(state_path, encoding="utf-8")
+                saved_path = parser["config"]["last_config"]
+
+                self.assertEqual(window.config_state_path, state_path)
+                self.assertEqual(saved_path, "configs/selected.json")
+                self.assertFalse(Path(saved_path).is_absolute())
+                self.assertNotIn(str(app_dir), saved_path)
+                self.assertEqual(window.config_name.text(), "configs/selected.json")
+            finally:
+                window.close()
+                self.app.processEvents()
+
+    def test_packaged_config_write_can_reference_config_next_to_exe_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app_dir = root / "dist"
+            app_dir.mkdir()
+            selected_config = self._write_config_file(root / "configs" / "selected.json")
+            state_path = app_dir / "config.ini"
+
+            with (
+                patch.object(sys, "frozen", True, create=True),
+                patch.object(sys, "executable", str(app_dir / "编队仿真.exe")),
+            ):
+                window = MainWindow(auto_load_config=False)
+            window._apply_config_path(str(selected_config))
+            try:
+                parser = ConfigParser()
+                parser.read(state_path, encoding="utf-8")
+                saved_path = parser["config"]["last_config"]
+
+                self.assertEqual(saved_path, "../configs/selected.json")
+                self.assertFalse(Path(saved_path).is_absolute())
+            finally:
+                window.close()
+                self.app.processEvents()
+
+            with (
+                patch.object(sys, "frozen", True, create=True),
+                patch.object(sys, "executable", str(app_dir / "编队仿真.exe")),
+            ):
+                reloaded = MainWindow()
+            try:
+                self.assertEqual(reloaded.sim.controller.get_snapshot().run_state, "READY")
+                self.assertEqual(reloaded.config_name.text(), "../configs/selected.json")
+            finally:
+                reloaded.close()
+                self.app.processEvents()
+
+    def test_choose_config_starts_from_last_config_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            self._write_config_file(project_root / "configs" / "last.json")
+            new_config = self._write_config_file(project_root / "configs" / "new.json")
+            state_path = project_root / "config.ini"
+            state_path.write_text("[config]\nlast_config = configs/last.json\n", encoding="utf-8")
+
+            window = MainWindow(
+                project_root=project_root,
+                config_state_path=state_path,
+                auto_load_config=False,
+            )
+            try:
+                with patch(
+                    "src.ui.gui.main_window.QFileDialog.getOpenFileName",
+                    return_value=(str(new_config), "Config (*.json)"),
+                ) as get_open_file_name:
+                    window._choose_config()
+
+                args = get_open_file_name.call_args.args
+                self.assertEqual(Path(args[2]), (project_root / "configs").resolve())
+                self.assertEqual(window.config_name.text(), "configs/new.json")
+            finally:
+                window.close()
+                self.app.processEvents()
+
+    def test_successful_config_load_updates_ini_with_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            first_config = self._write_config_file(project_root / "configs" / "first.json")
+            second_config = self._write_config_file(project_root / "configs" / "second.json")
+            state_path = project_root / "config.ini"
+            state_path.write_text("[config]\nlast_config = configs/first.json\n", encoding="utf-8")
+
+            window = MainWindow(
+                project_root=project_root,
+                config_state_path=state_path,
+                auto_load_config=False,
+            )
+            window._apply_config_path(str(second_config))
+            try:
+                parser = ConfigParser()
+                parser.read(state_path, encoding="utf-8")
+                saved_path = parser["config"]["last_config"]
+
+                self.assertEqual(saved_path, "configs/second.json")
+                self.assertFalse(Path(saved_path).is_absolute())
+                self.assertNotIn(str(project_root), saved_path)
+                self.assertEqual(window.config_name.text(), "configs/second.json")
+            finally:
+                window.close()
+                self.app.processEvents()
+
+    def test_failed_config_load_does_not_update_ini(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            self._write_config_file(project_root / "configs" / "first.json")
+            bad_config = project_root / "configs" / "bad.json"
+            bad_config.write_text("{", encoding="utf-8")
+            state_path = project_root / "config.ini"
+            state_path.write_text("[config]\nlast_config = configs/first.json\n", encoding="utf-8")
+
+            window = MainWindow(
+                project_root=project_root,
+                config_state_path=state_path,
+                auto_load_config=False,
+            )
+            window._apply_config_path(str(bad_config))
+            try:
+                parser = ConfigParser()
+                parser.read(state_path, encoding="utf-8")
+
+                self.assertEqual(parser["config"]["last_config"], "configs/first.json")
+                self.assertIn("加载配置失败", window.log_dialog.text.toPlainText())
+            finally:
+                window.close()
+                self.app.processEvents()
+
     def test_node_health_drives_table_status_and_warning_color_target(self) -> None:
         self._load_ui_config()
 
@@ -244,6 +430,24 @@ class GuiViewInteractionTests(unittest.TestCase):
             self.app.processEvents()
         finally:
             Path(config_path).unlink(missing_ok=True)
+
+    def _write_config_file(self, path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        config = {
+            "duration_s": 0.05,
+            "step_s": 0.005,
+            "playback_rate": 10.0,
+            "nodes": [
+                {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0},
+                {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1215.0},
+                {"node_id": "A03", "role": "wingman", "x_m": 88.0, "y_m": 202.0, "altitude_m": 1230.0},
+            ],
+            "links": [
+                {"link_id": "A01-A02", "direction": "duplex", "latency_ms": 18.0, "loss_rate": 0.01},
+            ],
+        }
+        path.write_text(json.dumps(config), encoding="utf-8")
+        return path
 
     def _count_pixels(self, widget, color_name: str) -> int:  # noqa: ANN001
         image = widget.grab().toImage()
