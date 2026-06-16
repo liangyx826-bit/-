@@ -494,11 +494,11 @@ def inject_link_qos(command: object) -> None: ...
 
 ### 8.4 编队算法
 
-编队算法是每架飞机本地运行的算法实体（×N，N≥1），承载编队、制导、控制律；集中式协调能力按需以单元寄宿在某实体内（领航-跟随寄宿长机），或独立成一个不飞行的实体（地面站 / 虚拟节点 / 参考节点，见 `0-架构HLD` 3.3）。仿真控制对所有实体使用同一套统一契约，不再区分协调 / 节点两种类型。
+编队算法实例总数 = **飞行实体 ×N（N≥1）** + **非飞行协调实体 ×0/1**：飞行实体承载编队、制导、控制律并产出 control；集中式协调能力按需以单元寄宿在某飞行实体内（领航-跟随寄宿长机），或独立成一个非飞行协调实体（地面站 / 虚拟节点 / 参考节点，见 `0-架构HLD` 3.3）。仿真控制对所有实体使用同一套统一契约，不再区分协调 / 节点两种类型，**飞行 / 非飞行由 `config.entity_type` 区分**（`flight` 绑定 `aircraft_id`、产 control；`coordination` 不绑、不产 control）。
 
 ```python
 class FormationAlgorithm:
-    def init(entity_id: str, config: dict[str, object]) -> None: ...
+    def init(entity_id: str, config: dict[str, object]) -> None: ...  # config.entity_type ∈ {flight, coordination}
     def step(context: FormationAlgorithmContext) -> FormationAlgorithmOutput: ...
     def declared_topics() -> list[MessageTopicSchema]: ...
     def reset() -> None: ...
@@ -507,7 +507,7 @@ class FormationAlgorithm:
 
 `FormationAlgorithmOutput` 字段：
 
-- `control`: 本实体控制量；**纯协调实体（不飞行）此字段为空**，仿真控制只对产出 control 的实体写模型。
+- `control`: 本实体控制量；**`entity_type == coordination`（非飞行）时此字段为空**，仿真控制按 `entity_type` 判定，只对飞行实体写模型。
 - `outbox`: 本实体要发送的消息（含协调单元广播的任务 / 队形指令）。
 - `status`: 算法状态摘要，供日志和控制回报使用。
 

@@ -24,12 +24,11 @@
 按 Jacobson/ICONIX 三要素拆分：Boundary（边界）、Control（控制）、Entity（实体）。鲁棒图阶段 Control 节点 4 个（仿真控制、模型迭代、编队算法、通信功能），位于 ICONIX 推荐上限内；3.4 高层分割阶段新增 1 个横切机制 Control（加扰），共 5 个。
 
 > **关于命名**：本平台目标是支持多种编队方法（领航-跟随 / 虚拟结构 / 行为法 / 一致性 等），算法的角色分布因方法而异。因此采用中性命名：
-> - **编队算法**（多实例 ×N，N≥1）：每架飞机本地运行的算法实体，承载编队、制导、控制律。集中式策略所需的全局协调能力**以单元形式寄宿在某个编队算法实体内**（领航-跟随寄宿长机），或独立成一个不飞行的编队算法实体（虚拟结构的地面站/虚拟节点、参考一致性的参考节点）；纯分布式方法（行为法、一致性）无协调能力。详见 3.3。
+> - **编队算法**：每架飞机本地一个**飞行实体**（×N，N≥1），承载编队、制导、控制律。集中式协调能力**以单元寄宿在某飞行实体内**（领航-跟随寄宿长机），或独立成一个**非飞行的协调实体**（×0/1，虚拟结构地面站/虚拟节点、参考一致性参考节点）；纯分布式方法（行为法、一致性）无协调实体。即实体总数 = 飞行实体 ×N + 非飞行协调实体 ×0/1；飞行 / 非飞行由配置 `entity_type` 区分（飞行实体绑定 `aircraft_id`、产出 control，非飞行协调实体不绑、不产 control）。详见 3.3。
 > - **通信功能** 接受 **拓扑+QoS 配置**（由仿真控制读配置后转发，图中虚线箭头），按算法所需的通信图（star / ring / mesh / 稀疏图 / 时变图）路由消息（通信扰动由"加扰"实施，见 3.4 / 4.4）。所有配置加载入口集中在仿真控制，避免配置入口分裂。
 
 ![鲁棒图](./assets/鲁棒图.png)
 
-> ⚠️ **待按实体模型重绘**：原图含"协调算法、节点算法"两个 Control，应合并为单一 **编队算法** Control（协调能力作为其内可选单元）。
 > 图源：[`鲁棒图.drawio`](./鲁棒图.drawio)
 
 ## 3.2 节点说明
@@ -42,7 +41,7 @@
 | Boundary | CLI 入口 | 接收 CLI 参数（`--config` `--seed` `--output` `--headless` 等）；加载配置文件、CLI 覆盖、调用 `仿真控制.run_until_complete(config)`（headless 模式启用；GUI 模式不启） |
 | Control | 仿真控制 | ① 基于配置和界面初始化各算法和模型，并将拓扑/QoS 等参数下发给通信功能；<br />② 任务调度（编队算法、模型迭代、加扰）；<br />③ 把扰动配置 + 不确定性索引整体下发给加扰；节拍触发加扰 tick；转发 UI 经控制界面下发的动态扰动注入命令；<br />④ 关键数据定时落盘；<br />⑤ 实时数据推送 |
 | Control | 模型迭代 | 统一推进所有飞机的动力学积分；内部按 init 配置 + seed 实施传感器噪声 / 定位漂移 / 控制滞后；通过 inject_wind / inject_fault 接受加扰 push 的动态扰动 |
-| Control | 编队算法 | 每架飞机本地的算法实体（×N，N≥1）；含编队、制导、控制律。集中式协调能力按需以单元寄宿在某实体内（领航-跟随寄宿长机）或独立成一个不飞行的实体（地面站 / 虚拟节点 / 参考节点）；分布式方法无协调能力（见 3.3） |
+| Control | 编队算法 | 飞行实体 ×N（N≥1，含编队、制导、控制律，产出 control）+ 非飞行协调实体 ×0/1（只调度、不产 control）。协调能力或以单元寄宿在某飞行实体内（领航-跟随寄宿长机），或独立成非飞行协调实体（地面站 / 虚拟节点 / 参考节点）；分布式方法无协调实体（见 3.3） |
 | Control | 通信功能 | 消息通道；按"拓扑+QoS"配置路由；内部持有消息缓冲（Inbox/Outbox/在途队列）；按 init QoS 配置 + seed 实施链路时延 / 丢包 / 带宽；通过 inject_link_fault 接受加扰 push 的链路故障 |
 | Control | 加扰（3.4 引入） | ① 持 model/comm 引用，统一管理不确定性索引 + 动态扰动；<br />② init 时把 stochastic 扰动配置 + seed 分发到 model/comm 的 set 接口；<br />③ 运行期 tick 推进动态扰动（wind / fault / link_fault）并 push 到 model/comm；<br />④ 接收 UI 经仿真控制下发的动态注入命令 |
 | Entity | 配置文件 | 算法配置（选哪种编队方法）、拓扑/QoS 配置、扰动配置、航线、机型、日志配置 等 |
@@ -76,7 +75,6 @@
 
 ![高层分割](./assets/高层分割.png)
 
-> ⚠️ **待按实体模型重绘**：验证对象组内的"协调算法、节点算法"应合并为单一 **编队算法**。
 > 图源：[`高层分割.drawio`](./高层分割.drawio)。鲁棒图节点是本图的子集，加扰为分割阶段发现并新增的机制。
 
 | 分组 | 包含节点 | 分组依据 |
@@ -126,8 +124,6 @@
 - **schema 声明**：算法对外声明消息 schema
 
 ![逻辑视图](assets/逻辑视图.png)
-
-> ⚠️ **待按实体模型重绘**：原图含"协调算法、节点算法"两个包，应合并为单一 **编队算法**（协调能力作为其内可选单元）。
 
 **关键设计约束**（图表达不出，单列）：
 
@@ -278,29 +274,26 @@ sequenceDiagram
     participant Model as 模型迭代
     participant Egress as 关键数据/实时显示
 
-    SimCtrl->>Comm: ① 触发派发
-    Note over Comm: envelope 派发受 QoS+RNG<br/>(时延/丢包/带宽) 及加扰 push 的<br/>link_fault state (断链) 影响
-    Comm-->>Agent: ② 派上轮 Inbox
+    SimCtrl->>Comm: ① 触发派发 tick
+    Note over Comm: envelope 派发受 QoS+RNG<br/>(时延/丢包/带宽) 及加扰 push 的<br/>link_fault state (断链) 影响；更新各实体 Inbox
 
     opt 本 tick 命中协调节拍
-        SimCtrl->>Coord: ③ 协调 tick
-        Coord-->>Comm: ④ 写参考信号
+        SimCtrl->>Coord: ② 注入状态+Inbox，协调 tick
+        Coord-->>SimCtrl: ③ 返回参考信号 (outbox)
     end
 
-    SimCtrl->>Agent: ⑤ 飞行 tick
-    Model--xAgent: ⑥ 数据流·读状态
-    Comm--xAgent: ⑦ 数据流·读 Inbox
-    Agent--xModel: ⑧ 数据流·写 u
+    SimCtrl->>Agent: ④ 注入状态+Inbox，飞行 tick
+    Agent-->>SimCtrl: ⑤ 返回 {control, outbox, status}
 
-    SimCtrl->>Model: ⑨ 积分一步
-    Note over Model: w 由加扰 push 的 wind/fault state 提供<br/>x+=dt·f(x,u,w)
+    SimCtrl->>Comm: ⑥ 写入本轮 outbox（含参考信号）
+    SimCtrl->>Model: ⑦ 写 control，积分一步
+    Note over Model: w 由加扰 push 的 wind/fault state 提供<br/>x += dt·f(x,u,w)
 
-    SimCtrl->>Egress: ⑩ 按节拍落盘/推送
-    Agent--xComm: ⑪ 数据流·写 Outbox
-    SimCtrl->>SimCtrl: ⑫ t += dt
+    SimCtrl->>Egress: ⑧ 按节拍落盘/推送
+    SimCtrl->>SimCtrl: ⑨ t += dt
 ```
 
-> 注：⑥⑦⑧⑪ 虚线箭头表示**数据流向**（非函数调用）；实际搬运者均为仿真控制（参数注入，见 3.4 解释 3），算法与模型迭代 / 通信功能之间没有直接调用。
+> 注：算法不直接触达模型迭代 / 通信功能——编队算法只接收仿真控制注入的状态 + Inbox，只返回 `{control?, outbox, status}`；读状态 / 读 Inbox / 写 control / 写 outbox 全部由仿真控制作为唯一搬运者完成（见 3.4 解释 3、`3-编队算法HLD`）。
 
 ### 4.4.4 扰动注入点（与执行阶段对应）
 
