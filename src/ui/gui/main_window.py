@@ -74,6 +74,7 @@ class LinkState:
 
     source: str
     target: str
+    direction: str
     latency_ms: int
     loss: float
     ok: bool = True
@@ -125,9 +126,9 @@ class MockSimulation:
             NodeState("A03", "wing", 88.0, 202.0, 5.0, 0.0),
         ]
         self.links = [
-            LinkState("A01", "A02", 18, 0.01),
-            LinkState("A01", "A03", 21, 0.01),
-            LinkState("A02", "A03", 30, 0.02),
+            LinkState("A01", "A02", "duplex", 18, 0.01),
+            LinkState("A01", "A03", "duplex", 21, 0.01),
+            LinkState("A02", "A03", "duplex", 30, 0.02),
         ]
         return self.snapshot()
 
@@ -369,6 +370,7 @@ class ControllerSimulationAdapter:
                 LinkState(
                     source=source,
                     target=target,
+                    direction=link.direction,
                     latency_ms=round(link.latency_ms),
                     loss=link.loss_rate,
                     ok=link.status == "normal",
@@ -422,6 +424,12 @@ def node_altitude(index: int, time_value: float) -> float:
     """Return a demo altitude for side-view rendering."""
 
     return 1200.0 + index * 35.0 + math.sin(time_value / 6.0 + index) * 12.0
+
+
+def link_direction_label(direction: str) -> str:
+    """Return the user-facing label for a communication link direction."""
+
+    return {"duplex": "双向", "simplex": "单向"}.get(direction, direction)
 
 
 class Theme:
@@ -1314,10 +1322,10 @@ class MainWindow(QMainWindow):
         layout.setSpacing(8)
         self.node_table = QTableWidget(0, 6)
         self.node_table.setHorizontalHeaderLabels(["ID", "侧偏(m)", "待飞距(m)", "高度(m)", "速度(m/s)", "状态"])
-        self.link_table = QTableWidget(0, 4)
-        self.link_table.setHorizontalHeaderLabels(["链路", "延迟", "丢包", "状态"])
+        self.link_table = QTableWidget(0, 5)
+        self.link_table.setHorizontalHeaderLabels(["链路", "方向", "延迟", "丢包", "状态"])
         self._configure_table(self.node_table, [48, 58, 74, 58, 76, 50])
-        self._configure_table(self.link_table, [92, 64, 58, 58])
+        self._configure_table(self.link_table, [86, 52, 58, 50, 54])
         node_title = QLabel("节点状态")
         node_title.setObjectName("sectionTitle")
         link_title = QLabel("链路状态")
@@ -1548,7 +1556,13 @@ class MainWindow(QMainWindow):
 
         self.link_table.setRowCount(len(snapshot.links))
         for row, link in enumerate(snapshot.links):
-            values = [f"{link.source}-{link.target}", f"{link.latency_ms}ms", f"{link.loss * 100:.0f}%", "正常" if link.ok else "丢包"]
+            values = [
+                f"{link.source}-{link.target}",
+                link_direction_label(link.direction),
+                f"{link.latency_ms}ms",
+                f"{link.loss * 100:.0f}%",
+                "正常" if link.ok else "丢包",
+            ]
             for column, value in enumerate(values):
                 self.link_table.setItem(row, column, QTableWidgetItem(value))
 

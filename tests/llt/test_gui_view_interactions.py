@@ -195,7 +195,32 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(statuses["A03"], "故障")
         self.assertEqual(statuses["A02"], "正常")
 
-    def _load_ui_config(self, *, duration_s: float = 0.05, step_s: float = 0.005) -> None:
+    def test_link_table_displays_direction_from_controller_snapshot(self) -> None:
+        self._load_ui_config(
+            links=[
+                {"link_id": "A01-A02", "direction": "duplex", "latency_ms": 18.0, "loss_rate": 0.01},
+                {"link_id": "A02-A03", "direction": "simplex", "latency_ms": 30.0, "loss_rate": 0.02},
+            ]
+        )
+
+        directions = {
+            self.window.link_table.item(row, 0).text(): self.window.link_table.item(row, 1).text()
+            for row in range(self.window.link_table.rowCount())
+        }
+
+        self.assertEqual(self.window.link_table.columnCount(), 5)
+        self.assertEqual(self.window.link_table.horizontalHeaderItem(1).text(), "方向")
+        self.assertEqual(directions["A01-A02"], "双向")
+        self.assertEqual(directions["A02-A03"], "单向")
+        self.assertEqual(self.window.link_table.horizontalScrollBar().maximum(), 0)
+
+    def _load_ui_config(
+        self,
+        *,
+        duration_s: float = 0.05,
+        step_s: float = 0.005,
+        links: list[dict[str, object]] | None = None,
+    ) -> None:
         config = {
             "duration_s": duration_s,
             "step_s": step_s,
@@ -205,7 +230,7 @@ class GuiViewInteractionTests(unittest.TestCase):
                 {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1215.0},
                 {"node_id": "A03", "role": "wingman", "x_m": 88.0, "y_m": 202.0, "altitude_m": 1230.0},
             ],
-            "links": [
+            "links": links or [
                 {"link_id": "A01-A02", "latency_ms": 18.0, "loss_rate": 0.01},
                 {"link_id": "A01-A03", "latency_ms": 21.0, "loss_rate": 0.01},
                 {"link_id": "A02-A03", "latency_ms": 30.0, "loss_rate": 0.02},
