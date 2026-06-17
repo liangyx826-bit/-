@@ -31,7 +31,7 @@ class FormationAlgorithm:
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `node_id` | `str` | 本机 ID |
+| `node_id` | `str` | 本机 ID，沿用 `AircraftState.node_id`；对 `flight` 实体即其 `aircraft_id`（亦即 `init` 的 `entity_id`） |
 | `x_m / y_m / altitude_m` | `float` | 东 / 北 / 天 位置（E/N/U，沿用 `AircraftState` 工程字段名） |
 | `speed_mps` | `float` | 速度 V |
 | `theta_rad` | `float` | 航迹倾角 |
@@ -42,10 +42,10 @@ class FormationAlgorithm:
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `time_s` | `float` | 当前仿真时间 |
-| `dt_s` | `float` | 本实体步长（多速率下为该实体节拍） |
+| `dt_s` | `float` | 本拍步长（本轮所有实体同 20 Hz，见 `0-HLD.md` §4 调度；真·多速率留半物理） |
 | `self_state` | `NavState` | 本机导航视图 |
 | `inbox` | `list[MessageEnvelope]` | 上一轮派发到本实体的消息 |
-| `mission_command` | `MissionCommand \| None` | 仅协调单元消费；本轮恒"保持"，可为 `None` |
+| `mission_command` | `MissionCommand \| None` | **仅注入承载协调能力的实体**（本轮长机）；其任务编排产 `Mode` 并经广播下发。飞行僚机**不消费**它，僚机 `Mode` 来自 leader 广播（`ParsedInbox.task`）。本轮恒"保持"，可为 `None` |
 
 > 静态参数（增益、队形几何表、`entity_type` / 槽位号等）走 `init`，不进 context。
 
@@ -110,7 +110,7 @@ class Unit:                  # Protocol / 抽象基类
 # 实体 step() 编排示意（统一 step(u)->y 模板；具体单元见 5-用例）
 def step(self, ctx):
     parsed = self.rx.step(ctx.inbox)                       # 流程：收发(收)
-    mode   = self.orch.step(ctx.mission_command)           # 流程：任务编排(恒"保持")
+    mode   = self.orch.step(parsed)                        # 流程：任务编排(僚机 Mode 来自广播, 恒"保持")
     plan   = self.planner.step((mode, parsed))             # 流程：轨迹规划
     target = self.possolve.step((plan, parsed.leader_nav)) # 算法：位置解算
     dev    = self.devcalc.step((ctx.self_state, target))   # 算法：误差解算
@@ -125,7 +125,7 @@ def step(self, ctx):
 | 单元 | 库 | 抽象基类（族） | `u`（`step` 入参） | `y`（`step` 返回） | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | 收发处理(收) | 流程 | — | `inbox: list[MessageEnvelope]` | `ParsedInbox` | ⏳ 待展开 |
-| 任务编排 | 流程 | — | `mission_command \| None` | `Mode` | ⏳ 待展开 |
+| 任务编排 | 流程 | — | `mission_command`（长机）/ `ParsedInbox.task`（僚机） | `Mode` | ⏳ 待展开 |
 | 轨迹规划 | 流程 | `TrajectoryPlan` | `(Mode, ParsedInbox \| self_state)` | `Plan` | ⏳ 待展开 |
 | 位置解算 | 算法 | `PositionSolve` | `(Plan, leader_nav?)` | `Target` | ⏳ 待展开 |
 | 误差解算 | 算法 | `DeviationCalc` | `(self_state, Target)` | `Deviation` | ⏳ 待展开 |
