@@ -34,17 +34,17 @@ from dataclasses import dataclass, field
 # ===================== 初始信息 =====================
 @dataclass
 class FormSelfInitS:                       # 各个飞机的独有信息
-    id: int = 0                            # 飞机ID，从0开始
+    id: str = ""                           # 飞机ID（节点ID，如 "A01"，与通信模块节点 ID 一致）
 
 @dataclass
 class NetWorkS:                            # 网络拓扑中的一条通信链路
-    startId: int = 0                       # 链路起点飞机ID
-    endId: int = 0                         # 链路终点飞机ID
+    startId: str = ""                      # 链路起点飞机ID（节点ID）
+    endId: str = ""                        # 链路终点飞机ID（节点ID）
     dir: CommDirE = CommDirE.DUPLEX        # 该链路的通信方向
 
 @dataclass
 class FormPosS:                            # 队形中单个槽位的位置
-    id: int = 0                            # 飞机ID
+    id: str = ""                           # 飞机ID（节点ID），SlotGeometry 按它匹配查槽位
     x: float = 0.0                         # 相对队形基准的槽位位置，单位：m
     y: float = 0.0
     z: float = 0.0
