@@ -9,13 +9,35 @@ remain first-pass local implementations.
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Literal
 
+from src.algorithm.context.leaf_types import (
+    CommDirE,
+    FormCommInitS,
+    FormPatE,
+    FormPosS,
+    FormSelfInitS,
+    FormStageE,
+    MotionProfS,
+    NetWorkS,
+    PosInEarthS,
+    RemoteCmdS,
+    RouteS,
+    VdInEarthS,
+    WayLineS,
+    WayPointS,
+    copy_motion,
+)
+from src.algorithm.entity.base import EntityBase
+from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
+from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity
+from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.common.envelope import MessageEnvelope
 from src.environment.comm import CommunicationChannel
 from src.environment.model import AccelerationCommand, AircraftState, ModelIterator, node_id_from_config
@@ -60,6 +82,8 @@ class NodeState:
     nx: float
     nz: float
     phi_deg: float
+    cross_track_error_m: float | None = None
+    distance_to_go_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +98,18 @@ class LinkState:
 
 
 @dataclass(frozen=True)
+class RouteState:
+    """UI-facing reference route segment in ENU coordinates."""
+
+    start_x_m: float
+    start_y_m: float
+    start_altitude_m: float
+    end_x_m: float
+    end_y_m: float
+    end_altitude_m: float
+
+
+@dataclass(frozen=True)
 class SimulationSnapshot:
     """Complete realtime observation payload."""
 
@@ -84,6 +120,7 @@ class SimulationSnapshot:
     control_report: ControlReport
     nodes: list[NodeState]
     links: list[LinkState]
+    route: RouteState | None = None
 
 
 @dataclass(frozen=True)
@@ -142,6 +179,238 @@ class _ConfiguredLink:
     direction: str
 
 
+_DEFAULT_TRIANGLE_WING_SLOTS: tuple[tuple[float, float, float], ...] = (
+    (-54.0, 58.0, 0.0),
+    (-54.0, -58.0, 0.0),
+)
+
+
+def _motion_from_aircraft_state(state: AircraftState) -> MotionProfS:
+    ground_speed = (state.vx_mps * state.vx_mps + state.vy_mps * state.vy_mps) ** 0.5
+    return MotionProfS(
+        pos=PosInEarthS(state.x_m, state.y_m, state.altitude_m),
+        vd=VdInEarthS(
+            vEast=state.vx_mps,
+            vNorth=state.vy_mps,
+            vUp=state.vz_mps,
+            vTheta=state.theta_rad,
+            vPsi=state.psi_rad,
+            vd=ground_speed,
+        ),
+    )
+
+
+def _build_formation_comm_init(
+    nodes: list[object],
+    links: list[object],
+    config: dict[str, object] | None = None,
+) -> FormCommInitS:
+    network: list[NetWorkS] = []
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        link_id = str(link.get("link_id") or "")
+        start_id, sep, end_id = link_id.partition("-")
+        if not sep or not start_id or not end_id:
+            continue
+        direction = CommDirE.SIMPLEX if link.get("direction") == "simplex" else CommDirE.DUPLEX
+        network.append(NetWorkS(start_id, end_id, direction))
+
+    pattern, slots = _build_formation_slots(nodes, config)
+    return FormCommInitS(
+        netWork=network,
+        formPat=[pattern],
+        formPos=[slots],
+    )
+
+
+def _build_formation_slots(
+    nodes: list[object],
+    config: dict[str, object] | None,
+) -> tuple[FormPatE, list[FormPosS]]:
+    formation_config = (config or {}).get("formation")
+    if formation_config is None:
+        return FormPatE.TRIANGLE, _default_formation_slots(nodes)
+    if not isinstance(formation_config, dict):
+        raise ValueError("formation must be an object")
+
+    pattern = _formation_pattern_from_config(formation_config.get("pattern", "TRIANGLE"))
+    slot_config = formation_config.get("slots")
+    if slot_config is None:
+        return pattern, _default_formation_slots(nodes)
+    if not isinstance(slot_config, list) or not slot_config:
+        raise ValueError("formation.slots must be a non-empty list")
+
+    known_node_ids = {
+        node_id_from_config(node, index)
+        for index, node in enumerate(nodes)
+        if isinstance(node, dict)
+    }
+    slots_by_id: dict[str, FormPosS] = {}
+    for index, slot in enumerate(slot_config):
+        if not isinstance(slot, dict):
+            raise ValueError(f"formation.slots[{index}] must be an object")
+        node_id = str(slot.get("node_id", slot.get("id", "")))
+        if not node_id:
+            raise ValueError(f"formation.slots[{index}].node_id is required")
+        if node_id in slots_by_id:
+            raise ValueError(f"formation.slots contains duplicate node_id {node_id!r}")
+        if known_node_ids and node_id not in known_node_ids:
+            raise ValueError(f"formation.slots contains unknown node_id {node_id!r}")
+        slots_by_id[node_id] = FormPosS(
+            node_id,
+            _float_from_keys(slot, "formation.slots", index, ("x_m", "x")),
+            _float_from_keys(slot, "formation.slots", index, ("y_m", "y")),
+            _float_from_keys(slot, "formation.slots", index, ("z_m", "z")),
+        )
+
+    missing = [node_id for node_id in known_node_ids if node_id not in slots_by_id]
+    if missing:
+        raise ValueError(f"formation.slots missing node_id {missing[0]!r}")
+
+    ordered_slots: list[FormPosS] = []
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        ordered_slots.append(slots_by_id[node_id_from_config(node, index)])
+    return pattern, ordered_slots
+
+
+def _default_formation_slots(nodes: list[object]) -> list[FormPosS]:
+    leader_id = _leader_id_from_nodes(nodes)
+    slots: list[FormPosS] = []
+    wing_slot_index = 0
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        node_id = node_id_from_config(node, index)
+        if node_id == leader_id:
+            slots.append(FormPosS(node_id, 0.0, 0.0, 0.0))
+        else:
+            if wing_slot_index >= len(_DEFAULT_TRIANGLE_WING_SLOTS):
+                raise ValueError("default triangle formation requires explicit slots for more than two wingmen")
+            slot = _DEFAULT_TRIANGLE_WING_SLOTS[wing_slot_index]
+            slots.append(FormPosS(node_id, slot[0], slot[1], slot[2]))
+            wing_slot_index += 1
+    return slots
+
+
+def _formation_pattern_from_config(raw_pattern: object) -> FormPatE:
+    if isinstance(raw_pattern, str):
+        try:
+            return FormPatE[raw_pattern.strip().upper()]
+        except KeyError as exc:
+            raise ValueError(f"unknown formation.pattern {raw_pattern!r}") from exc
+    try:
+        return FormPatE(int(raw_pattern))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"unknown formation.pattern {raw_pattern!r}") from exc
+
+
+def _float_from_keys(
+    config: dict[str, object],
+    prefix: str,
+    index: int,
+    keys: tuple[str, str],
+) -> float:
+    for key in keys:
+        if key in config:
+            return float(config[key])
+    raise ValueError(f"{prefix}[{index}].{keys[0]} is required")
+
+
+def _build_leader_route(config: dict[str, object] | None = None) -> RouteS:
+    route_config = (config or {}).get("route")
+    if route_config is None:
+        return _default_leader_route()
+    if not isinstance(route_config, dict):
+        raise ValueError("route must be an object")
+
+    segments = route_config.get("segments", route_config.get("lines"))
+    if segments is None:
+        return RouteS(lines=[_wayline_from_config(route_config, 0, "route")])
+    if not isinstance(segments, list) or not segments:
+        raise ValueError("route.segments must be a non-empty list")
+    return RouteS(
+        lines=[
+            _wayline_from_config(segment, index, f"route.segments[{index}]", route_config)
+            for index, segment in enumerate(segments)
+        ]
+    )
+
+
+def _wayline_from_config(
+    segment_config: object,
+    index: int,
+    field_name: str,
+    route_defaults: dict[str, object] | None = None,
+) -> WayLineS:
+    if not isinstance(segment_config, dict):
+        raise ValueError(f"{field_name} must be an object")
+    defaults = route_defaults or {}
+    speed = float(
+        segment_config.get(
+            "speed_mps",
+            segment_config.get("vdCmd", defaults.get("speed_mps", defaults.get("vdCmd", 8.0))),
+        )
+    )
+    radius = float(
+        segment_config.get(
+            "radius_m",
+            segment_config.get("radius", defaults.get("radius_m", defaults.get("radius", 0.0))),
+        )
+    )
+    if speed < 0.0:
+        raise ValueError(f"{field_name}.speed_mps must be non-negative")
+    if radius != 0.0:
+        raise ValueError(f"{field_name}.radius_m must be 0 for straight route")
+    start = _route_point_from_config(segment_config.get("start"), f"{field_name}.start")
+    end = _route_point_from_config(segment_config.get("end"), f"{field_name}.end")
+    if start.east == end.east and start.north == end.north and start.h == end.h:
+        raise ValueError(f"{field_name} start and end must be different")
+    return WayLineS(
+        idx=index,
+        start=WayPointS(idx=index, pos=start),
+        end=WayPointS(idx=index + 1, pos=end),
+        vdCmd=speed,
+        radius=radius,
+    )
+
+
+def _default_leader_route() -> RouteS:
+    return RouteS(
+        lines=[
+            WayLineS(
+                idx=0,
+                start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0)),
+                end=WayPointS(idx=1, pos=PosInEarthS(1000.0, 0.0, 1000.0)),
+                vdCmd=8.0,
+                radius=0.0,
+            )
+        ]
+    )
+
+
+def _route_point_from_config(raw: object, field_name: str) -> PosInEarthS:
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_name} must be an object")
+    return PosInEarthS(
+        float(raw.get("x_m", raw.get("east", 0.0))),
+        float(raw.get("y_m", raw.get("north", 0.0))),
+        float(raw.get("altitude_m", raw.get("h", 0.0))),
+    )
+
+
+def _leader_id_from_nodes(nodes: list[object]) -> str:
+    for index, node in enumerate(nodes):
+        if isinstance(node, dict) and str(node.get("role") or "") == "leader":
+            return node_id_from_config(node, index)
+    for index, node in enumerate(nodes):
+        if isinstance(node, dict):
+            return node_id_from_config(node, index)
+    return ""
+
+
 class _ConfigLoader:
     """Minimal JSON/YAML loader for the first controller implementation."""
 
@@ -182,18 +451,42 @@ class _ConfigLoader:
             raise ValueError("nodes must be a list")
         if links is not None and not isinstance(links, list):
             raise ValueError("links must be a list")
+        _build_leader_route(config)
+        _build_formation_comm_init(list(nodes or []), list(links or []), config)
         ModelIterator._parse_model_config(model)
 
 
 
 class _NodeAlgorithm:
-    """Simple per-node formation algorithm stub."""
+    """Adapter from the portable formation entity API to SimulationController."""
 
-    _VELOCITY_GAIN = 1.2
-
-    def __init__(self, node_id: str, trim_velocity_mps: tuple[float, float, float]) -> None:
+    def __init__(
+        self,
+        node_id: str,
+        role: str,
+        comm_init: FormCommInitS,
+        initial_leader_state: MotionProfS | None,
+        leader_route: RouteS | None,
+    ) -> None:
         self._node_id = node_id
-        self._trim_velocity_mps = trim_velocity_mps
+        self._role = role
+        self._leader_route = leader_route
+        self._has_route_step = False
+        if role == "leader":
+            self._entity: EntityBase = LeaderEntity()
+        else:
+            self._entity = FollowerEntity()
+        self._entity.init(
+            EntityInitS(
+                selfInit=FormSelfInitS(node_id),
+                commInit=comm_init,
+                route=leader_route,
+            )
+        )
+        if role != "leader" and initial_leader_state is not None and hasattr(self._entity, "cxt"):
+            self._entity.cxt.cmd.stage = FormStageE.HOLD  # type: ignore[attr-defined]
+            self._entity.cxt.cmd.pattern = FormPatE.TRIANGLE  # type: ignore[attr-defined]
+            copy_motion(initial_leader_state, self._entity.cxt.leaderState)  # type: ignore[attr-defined]
 
     def step(
         self,
@@ -202,37 +495,50 @@ class _NodeAlgorithm:
         time_s: float,
         health: str = "normal",
     ) -> _NodeAlgorithmOutput:
-        del inbox
-        trim_speed = sum(value * value for value in self._trim_velocity_mps) ** 0.5
-        target_scale = 1.0
-        if health != "normal" and trim_speed > 0.0:
-            target_scale = min(1.0, 3.0 / trim_speed)
-        target_velocity = tuple(
-            target_scale * value
-            for value in self._trim_velocity_mps
+        entity_output = EntityOutputS()
+        self._entity.step(
+            EntityInputS(
+                selfState=_motion_from_aircraft_state(state),
+                inbox=inbox,
+                remote=RemoteCmdS(FormStageE.HOLD),
+            ),
+            entity_output,
         )
+        if self._role == "leader":
+            self._has_route_step = True
+        acc_cmd = entity_output.selfAccCmd or self._entity.cxt.selfAccCmd  # type: ignore[attr-defined]
         control = AccelerationCommand(
-            self._VELOCITY_GAIN * (target_velocity[0] - state.vx_mps),
-            self._VELOCITY_GAIN * (target_velocity[1] - state.vy_mps),
-            self._VELOCITY_GAIN * (target_velocity[2] - state.vz_mps),
+            acc_cmd.accEast,
+            acc_cmd.accNorth,
+            acc_cmd.accUp,
         )
         outbox = [
-            MessageEnvelope(
-                topic="node.status",
-                source=self._node_id,
-                target="broadcast",
-                timestamp=time_s,
-                payload={"health": health},
-            )
+            replace(message, timestamp=time_s)
+            for message in entity_output.outbox
         ]
         status = "reconfiguring" if health != "normal" else "forming"
         return _NodeAlgorithmOutput(control, outbox, status)
 
     def reset(self) -> None:
+        self._has_route_step = False
         return None
 
     def close(self) -> None:
-        return None
+        self._entity.close()
+
+    def current_stage(self) -> FormStageE:
+        cxt = getattr(self._entity, "cxt", None)
+        if cxt is None:
+            return FormStageE.NONE
+        return FormStageE(cxt.cmd.stage)
+
+    def current_route(self) -> WayLineS | None:
+        cxt = getattr(self._entity, "cxt", None)
+        if cxt is None or self._role != "leader":
+            return None
+        if not self._has_route_step and self._leader_route is not None and self._leader_route.lines:
+            return self._leader_route.lines[0]
+        return cxt.wayLine
 
 
 class _DisturbanceEngine:
@@ -490,7 +796,7 @@ class SimulationController:
             if self._run_state == "RUNNING":
                 return CommandResult("OK", "already running")
             self._run_state = "RUNNING"
-            self._control_report = "集结"
+            self._control_report = self._derive_control_report_unlocked()
             self._stop_requested.clear()
             self._start_worker_unlocked()
             self._latest_snapshot = self._make_snapshot_unlocked()
@@ -676,7 +982,7 @@ class SimulationController:
             if self._config is None:
                 return CommandResult("ERR_NO_CONFIG", "load config before run")
             self._run_state = "RUNNING"
-            self._control_report = "集结"
+            self._control_report = self._derive_control_report_unlocked()
             while self._run_state == "RUNNING":
                 try:
                     self._tick_unlocked(force_snapshot=True)
@@ -750,16 +1056,29 @@ class SimulationController:
             for i, node in enumerate(nodes)
             if isinstance(node, dict)
         }
+        states = self._model.read_states()
+        formation_comm_init = _build_formation_comm_init(list(nodes), raw_links, config)
+        leader_id = _leader_id_from_nodes(list(nodes))
+        initial_leader_state = states.get(leader_id)
+        initial_leader_motion = (
+            _motion_from_aircraft_state(initial_leader_state)
+            if initial_leader_state is not None
+            else None
+        )
+        leader_route = _build_leader_route(config)
         self._node_algorithms = {
             node_id: _NodeAlgorithm(
                 node_id,
-                (state.vx_mps, state.vy_mps, state.vz_mps),
+                self._node_roles.get(node_id, "wingman"),
+                formation_comm_init,
+                initial_leader_motion,
+                leader_route,
             )
-            for node_id, state in self._model.read_states().items()
+            for node_id in states
         }
         self._current_controls = {
             node_id: AccelerationCommand()
-            for node_id in self._model.read_states()
+            for node_id in states
         }
         self._logger.open(f"run-{int(time.time())}", config)
 
@@ -820,6 +1139,7 @@ class SimulationController:
 
     def _make_snapshot_unlocked(self) -> SimulationSnapshot:
         health_map = self._disturbance.read_health()
+        route = self._make_route_snapshot()
         nodes = [
             NodeState(
                 node_id=state.node_id,
@@ -837,6 +1157,8 @@ class SimulationController:
                 nx=state.nx,
                 nz=state.nz,
                 phi_deg=state.phi_deg,
+                cross_track_error_m=self._cross_track_error(state, route),
+                distance_to_go_m=self._distance_to_go(state, route),
             )
             for state in self._model.read_states().values()
         ]
@@ -849,6 +1171,7 @@ class SimulationController:
             control_report=self._control_report,
             nodes=nodes,
             links=links,
+            route=route,
         )
 
     def _parse_configured_links(self, raw_links: list[object]) -> list[_ConfiguredLink]:
@@ -886,6 +1209,47 @@ class SimulationController:
             )
         return links
 
+    def _make_route_snapshot(self) -> RouteState | None:
+        for algorithm in self._node_algorithms.values():
+            route = algorithm.current_route()
+            if route is None:
+                continue
+            return RouteState(
+                start_x_m=route.start.pos.east,
+                start_y_m=route.start.pos.north,
+                start_altitude_m=route.start.pos.h,
+                end_x_m=route.end.pos.east,
+                end_y_m=route.end.pos.north,
+                end_altitude_m=route.end.pos.h,
+            )
+        return None
+
+    @staticmethod
+    def _cross_track_error(state: AircraftState, route: RouteState | None) -> float | None:
+        if route is None:
+            return None
+        dx = route.end_x_m - route.start_x_m
+        dy = route.end_y_m - route.start_y_m
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            return None
+        normal_x = -dy / length
+        normal_y = dx / length
+        return (state.x_m - route.start_x_m) * normal_x + (state.y_m - route.start_y_m) * normal_y
+
+    @staticmethod
+    def _distance_to_go(state: AircraftState, route: RouteState | None) -> float | None:
+        if route is None:
+            return None
+        dx = route.end_x_m - route.start_x_m
+        dy = route.end_y_m - route.start_y_m
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            return None
+        track_x = dx / length
+        track_y = dy / length
+        return max(0.0, (route.end_x_m - state.x_m) * track_x + (route.end_y_m - state.y_m) * track_y)
+
     @staticmethod
     def _reverse_link_id(link_id: str) -> str:
         src, sep, dst = link_id.partition("-")
@@ -907,7 +1271,17 @@ class SimulationController:
     def _derive_control_report_unlocked(self) -> ControlReport:
         if any(h != "normal" for h in self._disturbance.read_health().values()):
             return "重构"
-        return "集结"
+        stages = [
+            algorithm.current_stage()
+            for algorithm in self._node_algorithms.values()
+        ]
+        if any(stage == FormStageE.RECONFIG for stage in stages):
+            return "重构"
+        if any(stage == FormStageE.RALLY for stage in stages):
+            return "集结"
+        if any(stage == FormStageE.HOLD for stage in stages):
+            return "保持"
+        return "保持" if self._node_algorithms else "待命"
 
     def _should_refresh_display_unlocked(self) -> bool:
         now_s = time.monotonic()
