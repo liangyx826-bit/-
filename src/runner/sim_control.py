@@ -121,6 +121,7 @@ class SimulationSnapshot:
     nodes: list[NodeState]
     links: list[LinkState]
     route: RouteState | None = None
+    route_segments: list[RouteState] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -326,6 +327,10 @@ def _build_leader_route(config: dict[str, object] | None = None) -> RouteS:
     if not isinstance(route_config, dict):
         raise ValueError("route must be an object")
 
+    waypoints = route_config.get("waypoints")
+    if waypoints is not None:
+        return RouteS(lines=_waylines_from_waypoints(waypoints, route_config))
+
     segments = route_config.get("segments", route_config.get("lines"))
     if segments is None:
         return RouteS(lines=[_wayline_from_config(route_config, 0, "route")])
@@ -337,6 +342,35 @@ def _build_leader_route(config: dict[str, object] | None = None) -> RouteS:
             for index, segment in enumerate(segments)
         ]
     )
+
+
+def _waylines_from_waypoints(raw_waypoints: object, route_defaults: dict[str, object]) -> list[WayLineS]:
+    if not isinstance(raw_waypoints, list) or len(raw_waypoints) < 2:
+        raise ValueError("route.waypoints must contain at least two points")
+    speed = float(route_defaults.get("speed_mps", route_defaults.get("vdCmd", 8.0)))
+    radius = float(route_defaults.get("radius_m", route_defaults.get("radius", 0.0)))
+    if speed < 0.0:
+        raise ValueError("route.speed_mps must be non-negative")
+    if radius != 0.0:
+        raise ValueError("route.radius_m must be 0 for straight route")
+    points = [
+        _route_point_from_config(raw_point, f"route.waypoints[{index}]")
+        for index, raw_point in enumerate(raw_waypoints)
+    ]
+    lines: list[WayLineS] = []
+    for index, (start, end) in enumerate(zip(points, points[1:])):
+        if start.east == end.east and start.north == end.north and start.h == end.h:
+            raise ValueError(f"route.waypoints[{index}] and route.waypoints[{index + 1}] must be different")
+        lines.append(
+            WayLineS(
+                idx=index,
+                start=WayPointS(idx=index, pos=start),
+                end=WayPointS(idx=index + 1, pos=end),
+                vdCmd=speed,
+                radius=radius,
+            )
+        )
+    return lines
 
 
 def _wayline_from_config(
@@ -409,6 +443,17 @@ def _leader_id_from_nodes(nodes: list[object]) -> str:
         if isinstance(node, dict):
             return node_id_from_config(node, index)
     return ""
+
+
+def _route_state_from_wayline(route: WayLineS) -> RouteState:
+    return RouteState(
+        start_x_m=route.start.pos.east,
+        start_y_m=route.start.pos.north,
+        start_altitude_m=route.start.pos.h,
+        end_x_m=route.end.pos.east,
+        end_y_m=route.end.pos.north,
+        end_altitude_m=route.end.pos.h,
+    )
 
 
 class _ConfigLoader:
@@ -710,6 +755,7 @@ class SimulationController:
         self._node_algorithms: dict[str, _NodeAlgorithm] = {}
         self._node_roles: dict[str, str] = {}
         self._configured_links: list[_ConfiguredLink] = []
+        self._leader_route: RouteS | None = None
         self._current_controls: dict[str, AccelerationCommand] = {}
         self._config: dict[str, object] | None = None
         self._seed = 0
@@ -1066,6 +1112,7 @@ class SimulationController:
             else None
         )
         leader_route = _build_leader_route(config)
+        self._leader_route = leader_route
         self._node_algorithms = {
             node_id: _NodeAlgorithm(
                 node_id,
@@ -1140,6 +1187,7 @@ class SimulationController:
     def _make_snapshot_unlocked(self) -> SimulationSnapshot:
         health_map = self._disturbance.read_health()
         route = self._make_route_snapshot()
+        route_segments = self._make_route_segment_snapshots()
         nodes = [
             NodeState(
                 node_id=state.node_id,
@@ -1172,6 +1220,7 @@ class SimulationController:
             nodes=nodes,
             links=links,
             route=route,
+            route_segments=route_segments,
         )
 
     def _parse_configured_links(self, raw_links: list[object]) -> list[_ConfiguredLink]:
@@ -1214,15 +1263,13 @@ class SimulationController:
             route = algorithm.current_route()
             if route is None:
                 continue
-            return RouteState(
-                start_x_m=route.start.pos.east,
-                start_y_m=route.start.pos.north,
-                start_altitude_m=route.start.pos.h,
-                end_x_m=route.end.pos.east,
-                end_y_m=route.end.pos.north,
-                end_altitude_m=route.end.pos.h,
-            )
+            return _route_state_from_wayline(route)
         return None
+
+    def _make_route_segment_snapshots(self) -> list[RouteState]:
+        if not self._node_algorithms or self._leader_route is None:
+            return []
+        return [_route_state_from_wayline(line) for line in self._leader_route.lines]
 
     @staticmethod
     def _cross_track_error(state: AircraftState, route: RouteState | None) -> float | None:
