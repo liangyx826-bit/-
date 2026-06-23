@@ -51,6 +51,7 @@ def horizontal_track_basis(state: MotionProfS) -> tuple[float, float]:
 def horizontal_track_to_enu(vector: tuple[float, float], state: MotionProfS) -> tuple[float, float]:
     """Transform a horizontal track vector to ENU without coupling vertical velocity."""
 
+    # 队形槽位只按水平航迹旋转，不把长机爬升/下降角耦合进平面偏移。
     return horizontal_track_vector_to_enu(vector, horizontal_track_basis(state))
 
 

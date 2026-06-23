@@ -59,6 +59,7 @@ class SlotGeometry(PosCalcBase):
 
         track = _horizontal_track_or_none(u.leaderState)
         if track is None:
+            # 长机水平航迹未定义时保持旧行为：槽位按 ENU 固定偏移解释，避免起步/悬停首拍崩溃。
             slot_east, slot_north = slot.x, slot.y
         else:
             slot_east, slot_north = horizontal_track_vector_to_enu((slot.x, slot.y), track)
@@ -71,6 +72,7 @@ class SlotGeometry(PosCalcBase):
         track_x, track_y = track
         err_x = y.selfCmd.pos.east - u.selfState.pos.east
         err_y = y.selfCmd.pos.north - u.selfState.pos.north
+        # 前向位置不由 PidCompose 控制，因此只把待飞距误差转成沿航迹速度修正。
         along_error = err_x * track_x + err_y * track_y
         speed_correction = max(
             -_MAX_ALONG_SLOT_SPEED_CORRECTION,
