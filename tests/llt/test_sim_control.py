@@ -493,6 +493,66 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertNotEqual(controller._current_controls["A02"].as_vector(), (0.0, 0.0, 0.0))
             controller.close()
 
+    def test_algorithm_pid_period_follows_simulation_step_and_decimation(self) -> None:
+        """编队 PID 控制周期应由仿真步长和算法分频统一注入，避免修改帧频后仍沿用固定 dt。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = _write_config(Path(tmp), duration_s=0.02, step_s=0.02)
+            controller = SimulationController()
+            controller.load_config(str(config_path))
+
+            leader = controller._node_algorithms["A01"]._entity
+            follower = controller._node_algorithms["A02"]._entity
+
+            self.assertAlmostEqual(leader._pos_track._lateral._cfg.dt, 0.2)
+            self.assertAlmostEqual(follower._pos_track._lateral._cfg.dt, 0.2)
+            controller.close()
+
+    def test_default_algorithm_pid_period_matches_design_contract(self) -> None:
+        """默认配置下编队 PID 控制周期应为 0.005s * 10 = 0.05s。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = _write_config(Path(tmp), duration_s=0.02)
+            controller = SimulationController()
+            controller.load_config(str(config_path))
+
+            leader = controller._node_algorithms["A01"]._entity
+            follower = controller._node_algorithms["A02"]._entity
+
+            self.assertAlmostEqual(leader._pos_track._lateral._cfg.dt, 0.05)
+            self.assertAlmostEqual(follower._pos_track._lateral._cfg.dt, 0.05)
+            controller.close()
+
+    def test_realtime_logging_records_each_algorithm_frame_with_odd_decimation(self) -> None:
+        """实时 tick 路径下算法分频为奇数时，日志也应记录每个算法更新帧。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = {
+                "duration_s": 0.05,
+                "step_s": 0.005,
+                "playback_rate": 10.0,
+                "algorithm_decimation": 3,
+                "nodes": [
+                    {"node_id": "A01", "role": "leader"},
+                    {"node_id": "A02", "role": "wingman"},
+                ],
+                "links": [],
+            }
+            config_path = Path(tmp) / "odd_decimation.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            controller.load_config(str(config_path))
+
+            with controller._lock:
+                controller._run_state = "RUNNING"
+                while controller._run_state == "RUNNING":
+                    controller._tick_unlocked()
+
+            logged_times = [round(snapshot.time_s, 3) for snapshot in controller._logger.snapshots]
+
+            self.assertEqual(logged_times, [0.005, 0.02, 0.035, 0.05])
+            controller.close()
+
     def test_run_until_complete_finishes_synchronously(self) -> None:
         controller = SimulationController()
 
