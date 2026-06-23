@@ -662,6 +662,64 @@ class SimulationControllerTests(unittest.TestCase):
             snapshot_lines = (run_dirs[0] / "snapshots.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual([round(json.loads(line)["time_s"], 6) for line in snapshot_lines], [0.05, 0.1])
 
+    def test_data_logger_opens_files_only_after_first_tick(self) -> None:
+        """加载配置和 reset 不应创建空 run 目录，首次推进仿真时才创建日志目录。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                config_path = _write_config(Path(tmp), duration_s=0.1, step_s=0.01)
+                controller = SimulationController()
+                self.assertEqual(controller.load_config(str(config_path)).code, "OK")
+                self.assertFalse((Path(tmp) / "logs").exists())
+
+                self.assertEqual(controller.reset().code, "OK")
+                self.assertFalse((Path(tmp) / "logs").exists())
+
+                self.assertEqual(controller.step().code, "OK")
+                self.assertEqual(len(list((Path(tmp) / "logs").glob("run-*"))), 1)
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
+    def test_snapshot_log_write_failure_warns_and_keeps_stepping(self) -> None:
+        """快照文件写失败只能降级为 WARN，不能让仿真 tick 返回 ERR_TICK_FAILED。"""
+
+        class BrokenSnapshotFile:
+            def write(self, _text: str) -> int:
+                raise OSError("disk unavailable")
+
+            def close(self) -> None:
+                return None
+
+            def flush(self) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                controller = SimulationController()
+                config_path = _write_config(Path(tmp), duration_s=0.1, step_s=0.01)
+                self.assertEqual(controller.load_config(str(config_path)).code, "OK")
+                self.assertEqual(controller.step(4).code, "OK")
+                assert controller._logger._snapshot_file is not None
+                controller._logger._snapshot_file.close()
+                controller._logger._snapshot_file = BrokenSnapshotFile()
+
+                result = controller.step()
+                snapshot = controller.get_snapshot()
+                warn_events = controller.get_recent_events(min_level="WARN")
+
+                self.assertEqual(result.code, "OK")
+                self.assertAlmostEqual(snapshot.time_s, 0.05)
+                self.assertTrue(any("snapshot log failed: disk unavailable" in event.message for event in warn_events))
+                self.assertFalse(controller._logger.opened)
+                self.assertTrue(controller._logger._file_logging_disabled)
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
     def test_data_logger_rounds_persisted_snapshot_precision(self) -> None:
         """关键数据日志落盘时按字段语义四舍五入，内存快照保留原始精度。"""
         with tempfile.TemporaryDirectory() as tmp:
