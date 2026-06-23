@@ -494,7 +494,7 @@ class ProcessUnitTests(unittest.TestCase):
         self.assertEqual(ctx.wayLine.end.pos.east, original_end)
 
     def test_leader_route_switches_by_20deg_turn_radius(self) -> None:
-        """验证多航段交接按 20deg 坡度转弯半径提前切到下一航段。"""
+        """验证多航段交接按 20deg 坡度转弯半径乘 1.2 裕度提前切到下一航段。"""
 
         ctx = FormContextS()
         planner = LeaderRoute()
@@ -519,7 +519,7 @@ class ProcessUnitTests(unittest.TestCase):
             )
         )
 
-        ctx.selfState = _motion(east=70.0, h=1000.0)
+        ctx.selfState = _motion(east=65.0, h=1000.0)
         planner.step(
             TraPlanInputS(cmd=ctx.cmd, wayLine=ctx.wayLine, selfState=ctx.selfState),
             TraPlanOutputS(wayLine=ctx.wayLine),

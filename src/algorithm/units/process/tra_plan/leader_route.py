@@ -10,6 +10,7 @@ from src.algorithm.units.process.tra_plan.base import TraPlanBase, TraPlanInitS,
 
 _GRAVITY_MPS2 = 9.80665  # 重力加速度，用于由速度和滚转角估算转弯半径
 _TURN_BANK_DEG = 20.0  # 标称协调转弯滚转角，越大则转弯半径越小
+_TURN_SWITCH_DISTANCE_SCALE = 1.2  # 切段提前量系数，用于给实际转弯响应留裕度
 
 
 @dataclass
@@ -149,8 +150,8 @@ def _turn_radius_m(line: WayLineS) -> float:
 def _turn_switch_distance_m(line: WayLineS, next_line: WayLineS) -> float:
     """计算航段切换提前量。注意：公式为 R 乘 tan(delta_psi/2)。"""
     delta_psi = _heading_change_rad(line, next_line)  # 相邻航段航向转角
-    # 几何上圆弧切入点到拐点的距离 = R*tan(转角/2)，据此提前切段进入转弯
-    return _turn_radius_m(line) * math.tan(delta_psi / 2.0)
+    # 几何上圆弧切入点到拐点的距离 = R*tan(转角/2)，再乘裕度系数提前切段。
+    return _TURN_SWITCH_DISTANCE_SCALE * _turn_radius_m(line) * math.tan(delta_psi / 2.0)
 
 
 def _heading_change_rad(line: WayLineS, next_line: WayLineS) -> float:
