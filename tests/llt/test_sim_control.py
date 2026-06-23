@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import tempfile
 import time
 import unittest
@@ -11,7 +12,17 @@ from pathlib import Path
 
 from src.algorithm.context.leaf_types import FormPatE
 from src.environment.model import AircraftState
-from src.runner.sim_control import DisturbanceCommand, SimulationController, _build_formation_comm_init, _build_leader_route
+from src.runner.sim_control import (
+    DisturbanceCommand,
+    LinkState,
+    NodeState,
+    RouteState,
+    SimulationController,
+    SimulationSnapshot,
+    _DataLogger,
+    _build_formation_comm_init,
+    _build_leader_route,
+)
 
 
 def _write_config(directory: Path, *, duration_s: float = 0.03, step_s: float = 0.005) -> Path:
@@ -623,6 +634,154 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertEqual(result.code, "OK")
         self.assertEqual(logged_times, [0.05, 0.1])
         controller.close()
+
+    def test_timed_data_logger_persists_snapshot_files(self) -> None:
+        """关键数据日志应落盘到 logs/run-*/snapshots.jsonl，便于仿真后查找。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                controller = SimulationController()
+                result = controller.run_until_complete(
+                    {
+                        "duration_s": 0.1,
+                        "step_s": 0.01,
+                        "nodes": [{"node_id": "A01"}],
+                        "links": [],
+                    }
+                )
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
+            run_dirs = list((Path(tmp) / "logs").glob("run-*"))
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(len(run_dirs), 1)
+            self.assertTrue((run_dirs[0] / "config.json").is_file())
+            self.assertTrue((run_dirs[0] / "events.jsonl").is_file())
+            snapshot_lines = (run_dirs[0] / "snapshots.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual([round(json.loads(line)["time_s"], 6) for line in snapshot_lines], [0.05, 0.1])
+
+    def test_data_logger_opens_files_only_after_first_tick(self) -> None:
+        """加载配置和 reset 不应创建空 run 目录，首次推进仿真时才创建日志目录。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                config_path = _write_config(Path(tmp), duration_s=0.1, step_s=0.01)
+                controller = SimulationController()
+                self.assertEqual(controller.load_config(str(config_path)).code, "OK")
+                self.assertFalse((Path(tmp) / "logs").exists())
+
+                self.assertEqual(controller.reset().code, "OK")
+                self.assertFalse((Path(tmp) / "logs").exists())
+
+                self.assertEqual(controller.step().code, "OK")
+                self.assertEqual(len(list((Path(tmp) / "logs").glob("run-*"))), 1)
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
+    def test_snapshot_log_write_failure_warns_and_keeps_stepping(self) -> None:
+        """快照文件写失败只能降级为 WARN，不能让仿真 tick 返回 ERR_TICK_FAILED。"""
+
+        class BrokenSnapshotFile:
+            def write(self, _text: str) -> int:
+                raise OSError("disk unavailable")
+
+            def close(self) -> None:
+                return None
+
+            def flush(self) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                controller = SimulationController()
+                config_path = _write_config(Path(tmp), duration_s=0.1, step_s=0.01)
+                self.assertEqual(controller.load_config(str(config_path)).code, "OK")
+                self.assertEqual(controller.step(4).code, "OK")
+                assert controller._logger._snapshot_file is not None
+                controller._logger._snapshot_file.close()
+                controller._logger._snapshot_file = BrokenSnapshotFile()
+
+                result = controller.step()
+                snapshot = controller.get_snapshot()
+                warn_events = controller.get_recent_events(min_level="WARN")
+
+                self.assertEqual(result.code, "OK")
+                self.assertAlmostEqual(snapshot.time_s, 0.05)
+                self.assertTrue(any("snapshot log failed: disk unavailable" in event.message for event in warn_events))
+                self.assertFalse(controller._logger.opened)
+                self.assertTrue(controller._logger._file_logging_disabled)
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
+    def test_data_logger_rounds_persisted_snapshot_precision(self) -> None:
+        """关键数据日志落盘时按字段语义四舍五入，内存快照保留原始精度。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshot = SimulationSnapshot(
+                time_s=1.23456,
+                duration_s=2.34567,
+                step_s=0.00555,
+                run_state="RUNNING",
+                control_report="保持",
+                nodes=[
+                    NodeState(
+                        node_id="A01",
+                        role="leader",
+                        health="normal",
+                        x_m=1.235,
+                        y_m=2.345,
+                        altitude_m=1234.565,
+                        psi_v_deg=12.345,
+                        theta_deg=1.235,
+                        speed_mps=40.555,
+                        vx_mps=1.235,
+                        vy_mps=2.345,
+                        vz_mps=-3.455,
+                        nx=0.12345,
+                        nz=1.23456,
+                        phi_deg=6.785,
+                        cross_track_error_m=7.895,
+                        distance_to_go_m=99.995,
+                    )
+                ],
+                links=[LinkState("A01-A02", "duplex", 12.3456, 0.012345, "normal")],
+                route=RouteState(0.005, 1.235, 1000.555, 2.345, 3.455, 1001.565),
+            )
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                logger = _DataLogger()
+                logger.open("run-precision", {})
+                logger.write_snapshot(snapshot)
+                logger.close()
+            finally:
+                os.chdir(cwd)
+
+            payload = json.loads((Path(tmp) / "logs" / "run-precision" / "snapshots.jsonl").read_text(encoding="utf-8"))
+            node = payload["nodes"][0]
+
+            self.assertEqual(payload["time_s"], 1.235)
+            self.assertEqual(payload["duration_s"], 2.346)
+            self.assertNotIn("step_s", payload)
+            self.assertNotIn("route", payload)
+            self.assertNotIn("route_segments", payload)
+            self.assertEqual(node["x_m"], 1.24)
+            self.assertEqual(node["altitude_m"], 1234.57)
+            self.assertEqual(node["speed_mps"], 40.56)
+            self.assertEqual(node["vx_mps"], 1.24)
+            self.assertEqual(node["nx"], 0.1235)
+            self.assertEqual(node["nz"], 1.2346)
+            self.assertEqual(node["psi_v_deg"], 12.35)
+            self.assertEqual(node["phi_deg"], 6.79)
+            self.assertEqual(node["cross_track_error_m"], 7.9)
+            self.assertEqual(logger.snapshots[0].time_s, 1.23456)
+            self.assertEqual(_DataLogger._round_log_value("ax_mps2", 1.2345), 1.235)
 
     def test_empty_config_does_not_create_default_aircraft_or_links(self) -> None:
         controller = SimulationController()

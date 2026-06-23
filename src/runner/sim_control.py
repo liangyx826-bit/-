@@ -13,9 +13,10 @@ import math
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 from src.algorithm.context.leaf_types import (
     CommDirE,
@@ -831,36 +832,164 @@ class _DisturbanceEngine:
 
 
 class _DataLogger:
-    """内存日志记录器占位实现。注意：当前不做持久化落盘。"""
+    """关键数据日志记录器。注意：同时保留内存副本并写入 JSONL 文件。"""
+
+    _TIME_KEYS = {"time_s", "duration_s", "step_s"}
+    _SNAPSHOT_OMIT_KEYS = {"step_s", "route", "route_segments"}
+    _LOAD_FACTOR_KEYS = {"nx", "nz"}
+    _ANGLE_SUFFIXES = ("_deg",)
+    _ACCELERATION_SUFFIXES = ("_mps2", "_mps3")
+    _SPEED_SUFFIXES = ("_mps",)
+    _POSITION_SUFFIXES = ("_m",)
 
     def __init__(self) -> None:
         """初始化 _DataLogger 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self.snapshots: list[SimulationSnapshot] = []
         self.events: list[SimulationEvent] = []
         self.opened = False
+        self.run_dir: Path | None = None
+        self._snapshot_file = None
+        self._event_file = None
+        self._file_logging_disabled = False
+        self.last_error_message = ""
 
-    def open(self, run_id: str, config: dict[str, object]) -> None:
-        """打开数据记录器资源。注意：路径为空时保持空操作。"""
-        del run_id, config
+    def reset(self) -> None:
+        """重置日志记录器状态。注意：只清当前运行，不创建文件目录。"""
+        self.close()
         self.snapshots.clear()
         self.events.clear()
+        self.run_dir = None
+        self._file_logging_disabled = False
+        self.last_error_message = ""
+
+    def open(self, run_id: str, config: dict[str, object]) -> bool:
+        """打开数据记录器资源。注意：文件打开失败时返回 False 而不打断仿真。"""
+        if self.opened:
+            return True
+        if self._file_logging_disabled:
+            return False
+        try:
+            self.run_dir = self._make_run_dir(run_id)
+            self.run_dir.mkdir(parents=True, exist_ok=False)
+            (self.run_dir / "config.json").write_text(
+                json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            # 使用行缓冲，仿真中断时也尽量保留已记录数据。
+            self._snapshot_file = (self.run_dir / "snapshots.jsonl").open("w", encoding="utf-8", buffering=1)
+            self._event_file = (self.run_dir / "events.jsonl").open("w", encoding="utf-8", buffering=1)
+            for event in self.events:
+                self._event_file.write(json.dumps(self._serialize_record(asdict(event)), ensure_ascii=False) + "\n")
+        except OSError as exc:
+            self._disable_file_logging(exc)
+            return False
         self.opened = True
+        return True
 
-    def write_snapshot(self, snapshot: SimulationSnapshot) -> None:
-        """写入一帧仿真快照。注意：记录器未打开时保持空操作。"""
+    def write_snapshot(self, snapshot: SimulationSnapshot) -> bool:
+        """写入一帧仿真快照。注意：文件失败返回 False，内存记录仍保留。"""
         self.snapshots.append(snapshot)
+        if self._snapshot_file is not None:
+            record = self._serialize_record(asdict(snapshot), omit_keys=self._SNAPSHOT_OMIT_KEYS)
+            try:
+                self._snapshot_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+            except OSError as exc:
+                self._disable_file_logging(exc)
+                return False
+        return True
 
-    def write_event(self, event: SimulationEvent) -> None:
-        """写入一条仿真事件。注意：事件格式需保持可序列化。"""
+    def write_event(self, event: SimulationEvent) -> bool:
+        """写入一条仿真事件。注意：文件失败返回 False，内存记录仍保留。"""
         self.events.append(event)
+        if self._event_file is not None:
+            try:
+                self._event_file.write(json.dumps(self._serialize_record(asdict(event)), ensure_ascii=False) + "\n")
+            except OSError as exc:
+                self._disable_file_logging(exc)
+                return False
+        return True
 
     def flush(self) -> None:
         """刷新记录缓冲。注意：频繁调用会增加 IO 开销。"""
-        return None
+        for handle in (self._snapshot_file, self._event_file):
+            if handle is not None:
+                try:
+                    handle.flush()
+                except OSError as exc:
+                    self._disable_file_logging(exc)
+                    break
 
     def close(self) -> None:
         """释放 _DataLogger 持有的资源。注意：关闭后不应继续调用运行接口。"""
+        for handle in (self._snapshot_file, self._event_file):
+            if handle is not None:
+                handle.close()
+        self._snapshot_file = None
+        self._event_file = None
         self.opened = False
+
+    def _disable_file_logging(self, exc: OSError) -> None:
+        """停用当前运行的文件落盘。注意：调用方负责把错误转为 WARN 事件。"""
+        self.last_error_message = str(exc)
+        for handle in (self._snapshot_file, self._event_file):
+            if handle is not None:
+                try:
+                    handle.close()
+                except OSError:
+                    pass
+        self._snapshot_file = None
+        self._event_file = None
+        self.opened = False
+        self._file_logging_disabled = True
+
+    @staticmethod
+    def _make_run_dir(run_id: str) -> Path:
+        """生成不冲突的运行日志目录。注意：同一秒多次启动会自动加序号。"""
+        base = Path("logs") / run_id
+        if not base.exists():
+            return base
+        index = 1
+        while True:
+            candidate = Path("logs") / f"{run_id}-{index}"
+            if not candidate.exists():
+                return candidate
+            index += 1
+
+    @classmethod
+    def _serialize_record(cls, record: dict[str, Any], *, omit_keys: set[str] | None = None) -> dict[str, Any]:
+        """按日志精度规则序列化记录。注意：只改变落盘值，不改内存快照。"""
+        ignored = omit_keys or set()
+        return {key: cls._round_log_value(key, value) for key, value in record.items() if key not in ignored}
+
+    @classmethod
+    def _round_log_value(cls, key: str, value: Any) -> Any:
+        """按字段语义四舍五入日志值。注意：嵌套列表和字典递归处理。"""
+        if isinstance(value, dict):
+            return cls._serialize_record(value)
+        if isinstance(value, list):
+            return [cls._round_log_value(key, item) for item in value]
+        if not isinstance(value, float) or not math.isfinite(value):
+            return value
+        decimals = cls._decimals_for_key(key)
+        if decimals is None:
+            return value
+        quant = Decimal("1").scaleb(-decimals)
+        return float(Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP))
+
+    @classmethod
+    def _decimals_for_key(cls, key: str) -> int | None:
+        """返回日志字段小数位规则。注意：未知物理量保持原始精度。"""
+        if key in cls._TIME_KEYS:
+            return 3
+        if key in cls._LOAD_FACTOR_KEYS:
+            return 4
+        if key.endswith(cls._ACCELERATION_SUFFIXES):
+            return 3
+        if key.endswith(cls._ANGLE_SUFFIXES):
+            return 2
+        if key.endswith(cls._SPEED_SUFFIXES) or key.endswith(cls._POSITION_SUFFIXES):
+            return 2
+        return None
 
 
 class SimulationController:
@@ -1351,14 +1480,15 @@ class SimulationController:
             node_id: AccelerationCommand()
             for node_id in states
         }
-        # 以墙钟时间生成 run_id 打开日志记录器。
-        self._logger.open(f"run-{int(time.time())}", config)
+        # 仅重置内存日志；文件目录延迟到首次实际 tick 时创建，避免空 run 目录。
+        self._logger.reset()
 
     def _tick_unlocked(self, *, force_snapshot: bool = False) -> SimulationSnapshot | None:
         """在已持锁状态下推进一个仿真 tick。注意：调用方负责锁和阶段检查。"""
         # 仅在运行/暂停态推进；其他状态直接回最近快照，不产生副作用。
         if self._run_state not in {"RUNNING", "PAUSED"}:
             return self._latest_snapshot
+        self._ensure_logger_open_unlocked()
         step_s = self._step_s
         tick_index = self._tick_index
         algorithm_tick = tick_index % self._algorithm_decimation == 0
@@ -1403,13 +1533,21 @@ class SimulationController:
             snapshot = self._latest_snapshot
         # 关键数据定时记录固定 20Hz；若单个 tick 跨过多个采样点，只记录当前最新状态一次。
         if should_log_snapshot and snapshot is not None:
-            self._logger.write_snapshot(snapshot)
+            if not self._logger.write_snapshot(snapshot):
+                self._append_event_unlocked("WARN", "DataLogger", f"snapshot log failed: {self._logger.last_error_message}")
             while self._time_s + _TIME_EPSILON_S >= self._next_log_sample_time_s:
                 self._next_log_sample_time_s += _LOG_SAMPLE_PERIOD_S
         # 仅当达到显示刷新间隔或仿真结束时才回传快照触发 UI 更新，否则返回 None 抑制刷新。
         if self._should_refresh_display_unlocked() or self._run_state == "FINISHED":
             return self._latest_snapshot
         return None
+
+    def _ensure_logger_open_unlocked(self) -> None:
+        """确保当前运行已创建日志目录。注意：打开失败只记录 WARN，不阻断 tick。"""
+        if self._config is None or self._logger.opened or self._logger._file_logging_disabled:
+            return
+        if not self._logger.open(f"run-{int(time.time())}", self._config):
+            self._append_event_unlocked("WARN", "DataLogger", f"open log failed: {self._logger.last_error_message}")
 
     def _run_formation_algorithms_unlocked(self) -> None:
         """运行编队算法链路。注意：算法输入应使用当前模型状态快照。"""
