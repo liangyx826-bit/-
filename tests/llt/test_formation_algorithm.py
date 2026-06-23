@@ -347,14 +347,14 @@ class PosCalcTests(unittest.TestCase):
 
 
 class PosTrackTests(unittest.TestCase):
-    def test_pid_compose_ignores_forward_position_and_uses_velocity_error(self) -> None:
-        """验证 PID 组合跟踪中前向只控速度，法向/侧向按苏联系轴序生成加速度。"""
+    def test_pid_compose_ignores_forward_position_and_uses_speed_pi(self) -> None:
+        """验证 PID 组合跟踪中前向只做速度 PI，法向/侧向按苏联系轴序生成加速度。"""
 
         tracker = PidCompose()
         tracker.init(
             PidComposeInitS(
                 vMin=3.0,
-                gainForward=CtrlInitS(kp=100.0, ki=0.0, kd=2.0, dt=0.1),
+                gainForward=CtrlInitS(kp=2.0, ki=1.0, kd=100.0, dt=0.1),
                 gainLateral=CtrlInitS(kp=0.5, ki=0.0, kd=0.0, dt=0.1),
                 gainVertical=CtrlInitS(kp=0.25, ki=0.0, kd=0.0, dt=0.1),
             )
@@ -368,7 +368,7 @@ class PosTrackTests(unittest.TestCase):
             PosTrackOutputS(accCmd=ctx.selfAccCmd),
         )
 
-        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 4.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 4.2)
         self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 2.0)
         self.assertAlmostEqual(ctx.selfAccCmd.accUp, 2.0)
 

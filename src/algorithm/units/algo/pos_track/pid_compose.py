@@ -49,16 +49,23 @@ class PidCompose(PosTrackBase):
             u.selfCmd.pos.north - u.selfState.pos.north,
             u.selfCmd.pos.h - u.selfState.pos.h,
         )
-        vel_err_enu = (
-            u.selfCmd.v.vEast - u.selfState.v.vEast,
-            u.selfCmd.v.vNorth - u.selfState.v.vNorth,
-            u.selfCmd.v.vUp - u.selfState.v.vUp,
-        )
         pos_err = enu_to_track(pos_err_enu, u.selfState)
-        vel_err = enu_to_track(vel_err_enu, u.selfState)
+        self_vel = enu_to_track(
+            (u.selfState.v.vEast, u.selfState.v.vNorth, u.selfState.v.vUp),
+            u.selfState,
+        )
+        trim_vel = enu_to_track(
+            (u.selfCmd.v.vEast, u.selfCmd.v.vNorth, u.selfCmd.v.vUp),
+            u.selfState,
+        )
+        vel_err = (
+            trim_vel[0] - self_vel[0],
+            trim_vel[1] - self_vel[1],
+            trim_vel[2] - self_vel[2],
+        )
 
         acc_track = (
-            self._forward.step(0.0, vel_err[0]),
+            self._forward.step(vel_err[0], 0.0),
             self._vertical.step(pos_err[1], vel_err[1]),
             self._lateral.step(pos_err[2], vel_err[2]),
         )
