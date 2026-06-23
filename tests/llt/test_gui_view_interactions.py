@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 from configparser import ConfigParser
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -146,6 +147,29 @@ class GuiViewInteractionTests(unittest.TestCase):
         )
 
         self.assert_route_and_aircraft_fit_viewport()
+
+    def test_top_view_does_not_refit_during_running_snapshot_updates(self) -> None:
+        self._load_ui_config()
+        view = self.window.top_view
+        initial_scale = view.scale_value
+        initial_offset = QPointF(view.offset)
+        snapshot = view.snapshot
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        moved_nodes = [replace(node, x=node.x + 400.0, y=node.y + 120.0) for node in snapshot.nodes]
+        running_snapshot = replace(
+            snapshot,
+            time=snapshot.time + snapshot.step,
+            run_state="RUNNING",
+            nodes=moved_nodes,
+        )
+
+        self.window._update_snapshot(running_snapshot)
+        self.app.processEvents()
+
+        self.assertAlmostEqual(view.scale_value, initial_scale)
+        self.assertAlmostEqual(view.offset.x(), initial_offset.x(), delta=0.01)
+        self.assertAlmostEqual(view.offset.y(), initial_offset.y(), delta=0.01)
 
     def test_reset_view_refits_route_and_aircraft_after_manual_view_change(self) -> None:
         self._load_ui_config(

@@ -709,12 +709,12 @@ class TopView(QGraphicsView):
         self.theme = theme
         self.viewport().update()
 
-    def set_snapshot(self, snapshot: Snapshot) -> None:
+    def set_snapshot(self, snapshot: Snapshot, *, fit_view: bool = False) -> None:
         """设置用于绘制的快照。注意：只更新显示缓存，不推进仿真。"""
         self.snapshot = snapshot
         if self.auto_center:
             self._apply_auto_center()
-        elif not self._manual_view:
+        elif fit_view and not self._manual_view:
             self._fit_route_to_view()
         self.viewport().update()
 
@@ -1807,7 +1807,7 @@ class MainWindow(QMainWindow):
         self.top_view.set_theme(theme)
         self.side_view.set_theme(theme)
 
-    def _update_snapshot(self, snapshot: Snapshot) -> None:
+    def _update_snapshot(self, snapshot: Snapshot, *, fit_top_view: bool = False) -> None:
         """更新 snapshot 状态。注意：保持界面显示和内部数据一致。"""
         self.run_state_label.setText(snapshot.run_state)
         self.report_label.setText(f"回报：{snapshot.control_report}")
@@ -1822,7 +1822,7 @@ class MainWindow(QMainWindow):
         for button in self.disturbance_buttons:
             button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
         self.start_button.setText("继续" if snapshot.run_state == "PAUSED" else "开始")
-        self.top_view.set_snapshot(snapshot)
+        self.top_view.set_snapshot(snapshot, fit_view=fit_top_view)
         self.side_view.set_snapshot(snapshot)
         self._update_tables(snapshot)
 
@@ -1883,7 +1883,7 @@ class MainWindow(QMainWindow):
         """响应重置按钮并恢复初始状态。注意：保留当前配置路径。"""
         self.timer.stop()
         snapshot = self.sim.reset()
-        self._update_snapshot(snapshot)
+        self._update_snapshot(snapshot, fit_top_view=True)
         self._log("SimControl", f"reset -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _on_tick(self) -> None:
@@ -1920,7 +1920,7 @@ class MainWindow(QMainWindow):
     def _apply_config_path(self, path: str, *, remember: bool = True) -> None:
         """应用 config path 设置。注意：只修改对应显示或运行参数。"""
         self.timer.stop()
-        self._update_snapshot(self.sim.load_config(path))
+        self._update_snapshot(self.sim.load_config(path), fit_top_view=True)
         if self.sim.last_result_code == "OK":
             display_path = self._display_config_path(Path(path))
             self.config_name.setText(display_path)
