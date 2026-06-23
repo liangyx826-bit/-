@@ -1708,13 +1708,13 @@ class MainWindow(QMainWindow):
         form.addRow("时长(s)", self.duration_input)
         layout.addWidget(config_group)
 
-        # “播放”分组：速度滑块范围 1..100，对应 0.1x..10.0x（见 _on_speed_changed 除以 10）。
+        # “播放”分组：速度滑块范围 1..200，对应 0.1x..20.0x（见 _on_speed_changed 除以 10）。
         playback_group = QGroupBox("播放")
         playback_layout = QVBoxLayout(playback_group)
         playback_layout.setContentsMargins(10, 18, 10, 10)
         self.speed_label = QLabel("1.0x")
         self.speed_slider = QSlider(Qt.Orientation.Horizontal)
-        self.speed_slider.setRange(1, 100)
+        self.speed_slider.setRange(1, 200)
         self.speed_slider.setValue(10)  # 默认 1.0x
         self.speed_slider.valueChanged.connect(self._on_speed_changed)
         playback_layout.addWidget(self.speed_slider)
@@ -2304,7 +2304,7 @@ class MainWindow(QMainWindow):
 
     def _on_speed_changed(self, value: int) -> None:
         """处理 speed changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
-        # 滑块整数值 / 10 得到倍率（1->0.1x, 10->1.0x, 100->10.0x）。
+        # 滑块整数值 / 10 得到倍率（1->0.1x, 10->1.0x, 200->20.0x）。
         speed = value / 10.0
         self.sim.set_speed(speed)
         self.speed_label.setText(f"{speed:.1f}x")

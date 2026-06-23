@@ -75,6 +75,15 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertFalse(self.window.top_view.show_grid)
         self.assertFalse(self.window.side_view.show_grid)
 
+    def test_playback_slider_supports_twenty_times_rate(self) -> None:
+        self.assertEqual(self.window.speed_slider.maximum(), 200)
+
+        self.window.speed_slider.setValue(200)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.speed_label.text(), "20.0x")
+        self.assertAlmostEqual(self.window.sim.speed, 20.0)
+
     def test_side_grid_uses_shared_world_x_mapping(self) -> None:
         self.window.side_view.snapshot = None
         self.window.top_view.offset = QPointF(73.0, 0.0)
