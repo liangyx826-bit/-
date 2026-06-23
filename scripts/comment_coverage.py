@@ -22,6 +22,7 @@ docstring 覆盖率，并单独统计行内注释比例。相比"注释行 / 总
     python scripts/comment_coverage.py                       # 扫描 src/，仅报告不拦截
     python scripts/comment_coverage.py --fail-under 85        # 总体 docstring < 85% 则退出码 1
     python scripts/comment_coverage.py --fail-under-class 50  # 单独卡"类" docstring 覆盖率
+    python scripts/comment_coverage.py --fail-under-inline 15 # 行内注释比例 < 15% 则退出码 1
     python scripts/comment_coverage.py --root path            # 指定根目录
     python scripts/comment_coverage.py --sort cov             # 文件按 docstring 覆盖率升序（先看最差）
     python scripts/comment_coverage.py --worst 10             # 只列 docstring 覆盖最低的 10 个文件
@@ -154,7 +155,10 @@ def render(stats: list[FileStat], skipped: list[Path], root: Path,
     tot = (mod[0] + cls[0] + fnc[0], mod[1] + cls[1] + fnc[1])
     cmt = sum(s.comment_lines for s in stats)
     code = sum(s.code_lines for s in stats)
-    summary = {"module": mod, "class": cls, "function": fnc, "total": tot}
+    summary = {
+        "module": mod, "class": cls, "function": fnc, "total": tot,
+        "inline": (cmt, code),
+    }
 
     out.write("== docstring 覆盖率 ==\n")
     out.write(f"  模块  module   : {mod[0]:>4}/{mod[1]:<4} {_pct(*mod)}\n")
@@ -197,6 +201,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="类层 docstring 覆盖率门禁")
     parser.add_argument("--fail-under-func", type=float, default=None, metavar="PCT",
                         help="函数层 docstring 覆盖率门禁")
+    parser.add_argument("--fail-under-inline", type=float, default=None, metavar="PCT",
+                        help="行内注释比例（注释行/代码行）低于该百分比则退出码 1")
     parser.add_argument("--sort", choices=("path", "cov"), default="path",
                         help="文件明细排序：path 按路径，cov 按覆盖率升序")
     parser.add_argument("--worst", type=int, default=None, metavar="N",
@@ -252,6 +258,14 @@ def main(argv: list[str] | None = None) -> int:
         actual = 100 * doc / tot if tot else 100.0
         if actual + 1e-9 < threshold:
             print(f"[FAIL] {name} docstring 覆盖率 {actual:.1f}% < 阈值 {threshold:.1f}%",
+                  file=sys.stderr)
+            failed = True
+
+    if args.fail_under_inline is not None:
+        cmt, code = summary["inline"]
+        actual = 100 * cmt / code if code else 0.0
+        if actual + 1e-9 < args.fail_under_inline:
+            print(f"[FAIL] 行内注释比例 {actual:.1f}% < 阈值 {args.fail_under_inline:.1f}%",
                   file=sys.stderr)
             failed = True
     return 1 if failed else 0
