@@ -29,6 +29,7 @@ class FormContextS:
 
 
 def reset_context(dst: FormContextS) -> None:
+    """重置全局算法上下文，清空本轮仿真遗留数据。注意：只应在重新初始化场景时调用。"""
     fresh = FormContextS()
     copy_snapshot(fresh.cmd, dst.cmd)
     dst.state.clear()

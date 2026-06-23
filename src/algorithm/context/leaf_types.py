@@ -119,12 +119,14 @@ class RemoteCmdS:
 
 
 def copy_position(src: PosInEarthS, dst: PosInEarthS) -> None:
+    """复制位置对象，避免调用方持有原始可变引用。注意：新增坐标字段时需同步补齐。"""
     dst.east = src.east
     dst.north = src.north
     dst.h = src.h
 
 
 def copy_velocity(src: VdInEarthS, dst: VdInEarthS) -> None:
+    """复制速度对象，避免速度状态被外部误改。注意：单位保持为米每秒。"""
     dst.vEast = src.vEast
     dst.vNorth = src.vNorth
     dst.vUp = src.vUp
@@ -134,11 +136,13 @@ def copy_velocity(src: VdInEarthS, dst: VdInEarthS) -> None:
 
 
 def copy_motion(src: MotionProfS, dst: MotionProfS) -> None:
+    """复制运动状态对象，包含位置、速度和姿态信息。注意：嵌套对象需要逐层复制。"""
     copy_position(src.pos, dst.pos)
     copy_velocity(src.vd, dst.vd)
 
 
 def copy_wayline(src: WayLineS, dst: WayLineS) -> None:
+    """复制单段航线数据，供算法模块安全读写。注意：起终点对象不能复用原引用。"""
     dst.idx = src.idx
     dst.start.idx = src.start.idx
     copy_position(src.start.pos, dst.start.pos)
@@ -149,6 +153,7 @@ def copy_wayline(src: WayLineS, dst: WayLineS) -> None:
 
 
 def copy_snapshot(src: FormSnapshotS, dst: FormSnapshotS) -> None:
+    """复制上下文快照，隔离算法输入和显示输出。注意：新增快照字段时需同步复制。"""
     dst.stage = FormStageE(src.stage)
     dst.pattern = FormPatE(src.pattern)
     dst.step = int(src.step)

@@ -9,6 +9,6 @@ class DisturbanceManager:
     """Manage stochastic and dynamic disturbances."""
 
     def tick(self, dt: float) -> None:
-        """Advance dynamic disturbances and push injections to model/comm."""
+        """推进模块内部时钟或动态状态一个周期。注意：调用频率应与仿真步长一致。"""
         raise NotImplementedError
 

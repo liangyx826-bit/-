@@ -34,16 +34,19 @@ class SlotGeometryInputS(PosCalcInputS):
 
 class SlotGeometry(PosCalcBase):
     def __init__(self) -> None:
+        """初始化 SlotGeometry 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._self_id = ""
         self._form_pat: list[FormPatE] = []
         self._form_pos: list[list[FormPosS]] = []
 
     def init(self, cfg: SlotGeometryInitS) -> None:
+        """按配置初始化 SlotGeometry。注意：调用方需先准备好必要依赖和输入数据。"""
         self._self_id = cfg.selfId
         self._form_pat = list(cfg.formPat)
         self._form_pos = [list(row) for row in cfg.formPos]
 
     def step(self, u: SlotGeometryInputS, y: PosCalcOutputS) -> None:
+        """推进 SlotGeometry 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if u.leaderState is None or u.cmd is None or y.selfCmd is None:
             raise ValueError("SlotGeometry ports must be bound")
         pattern = FormPatE(u.cmd.pattern)
@@ -85,10 +88,12 @@ class SlotGeometry(PosCalcBase):
         return None
 
     def reset(self) -> None:
+        """复位 SlotGeometry 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         return None
 
 
 def _horizontal_track_or_none(state: MotionProfS) -> tuple[float, float] | None:
+    """计算可用的水平航迹基向量。注意：航段退化时返回空值并由调用方兜底。"""
     try:
         return horizontal_track_basis(state)
     except ValueError:
