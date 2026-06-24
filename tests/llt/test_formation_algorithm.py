@@ -235,16 +235,40 @@ class PosCalcTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "horizontal"):
             RouteInterp().step(u, PosCalcOutputS(selfCmd=MotionProfS()))
 
-    def test_route_interp_rejects_curve_segment(self) -> None:
-        """验证本轮未实现的曲线航段会显式报错，避免静默给出错误目标。"""
+    def test_route_interp_tracks_arc_segment_with_curvature_ff(self) -> None:
+        """验证圆弧航段：目标点投影到弧上、速度沿切向、曲率前馈 dVPsi=vd·κ(右转为负)。"""
 
-        route = RouteInterp()
-        u = RouteInterpInputS(
-            selfState=_motion(),
-            wayLine=WayLineS(radius=10.0),
+        # 东->南右转圆弧，R=400：切入(1600,0)、切出(2000,-400)、圆心(1600,-400)、turnSign=-1。
+        line = WayLineS(
+            start=WayPointS(pos=PosInEarthS(1600.0, 0.0, 1000.0)),
+            end=WayPointS(pos=PosInEarthS(2000.0, -400.0, 1000.0)),
+            vdCmd=20.0,
+            radius=400.0,
+            center=PosInEarthS(1600.0, -400.0, 1000.0),
+            turnSign=-1.0,
         )
-        with self.assertRaisesRegex(NotImplementedError, "curve"):
-            route.step(u, PosCalcOutputS(selfCmd=MotionProfS()))
+        # 飞机恰在弧中点(进度 0.5)，航向东南(-45°)。
+        mid_e = 1600.0 + 400.0 * math.cos(math.pi / 4.0)
+        mid_n = -400.0 + 400.0 * math.sin(math.pi / 4.0)
+        self_state = _motion(
+            east=mid_e, north=mid_n, h=1000.0,
+            v_east=20.0 * math.cos(-math.pi / 4.0), v_north=20.0 * math.sin(-math.pi / 4.0),
+        )
+        route = RouteInterp()
+        route.init(RouteInterpInitS(leadTimeS=0.5))  # σ=0.5s
+        cmd = MotionProfS()
+
+        route.step(RouteInterpInputS(selfState=self_state, wayLine=line), PosCalcOutputS(selfCmd=cmd))
+
+        # 目标点在弧上(到圆心距离=R)，且为该在弧点的投影(=自身)。
+        self.assertAlmostEqual(math.hypot(cmd.pos.east - 1600.0, cmd.pos.north + 400.0), 400.0, places=3)
+        self.assertAlmostEqual(cmd.pos.east, mid_e, places=3)
+        self.assertAlmostEqual(cmd.pos.north, mid_n, places=3)
+        # 速度沿切向、地速=vdCmd、航向 -45°。
+        self.assertAlmostEqual(cmd.v.vd, 20.0, places=6)
+        self.assertAlmostEqual(cmd.v.vPsi, -math.pi / 4.0, places=4)
+        # 曲率前馈 dVPsi = vd·κ = 20·(-1/400) = -0.05 rad/s。
+        self.assertAlmostEqual(cmd.v.dVPsi, 20.0 * (-1.0 / 400.0), places=4)
 
     def test_slot_geometry_uses_pattern_lookup_and_self_id(self) -> None:
         """验证僚机槽位按 pattern 反查队形行、按 selfId 查槽位，而不是按枚举值或数组位置取。"""

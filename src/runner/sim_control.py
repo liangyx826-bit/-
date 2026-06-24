@@ -37,6 +37,7 @@ from src.algorithm.context.leaf_types import (
     copy_motion,
 )
 from src.algorithm.entity.base import EntityBase
+from src.algorithm.units.algo.arc_path import corner_arc
 from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
 from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
@@ -386,8 +387,8 @@ def _float_from_keys(
     raise ValueError(f"{prefix}[{index}].{keys[0]} is required")
 
 
-def _build_leader_route(config: dict[str, object] | None = None) -> RouteS:
-    """根据配置生成长机航线。注意：支持多航点并转换为多航段。"""
+def _build_leader_route(config: dict[str, object] | None = None, *, insert_arcs: bool = True) -> RouteS:
+    """根据配置生成长机航线。注意：insert_arcs=False 时拐点不插圆弧(用于显示原始航段)。"""
     # 无 route 配置时用默认直线航线兜底。
     route_config = (config or {}).get("route")
     if route_config is None:
@@ -398,7 +399,7 @@ def _build_leader_route(config: dict[str, object] | None = None) -> RouteS:
     # 三种写法优先级：waypoints（航点序列）> segments/lines（航段列表）> 单段。
     waypoints = route_config.get("waypoints")
     if waypoints is not None:
-        return RouteS(lines=_waylines_from_waypoints(waypoints, route_config))
+        return RouteS(lines=_waylines_from_waypoints(waypoints, route_config, insert_arcs=insert_arcs))
 
     segments = route_config.get("segments", route_config.get("lines"))
     if segments is None:
@@ -413,36 +414,98 @@ def _build_leader_route(config: dict[str, object] | None = None) -> RouteS:
     )
 
 
-def _waylines_from_waypoints(raw_waypoints: object, route_defaults: dict[str, object]) -> list[WayLineS]:
-    """把航点序列转换为航段序列。注意：航点少于两个时不能形成有效航线。"""
+def _waypoint_radius(raw_point: object, default_radius: float, field_name: str) -> float:
+    """读取航点的预期转弯半径 R。注意：兼容 R/radius_m 两种键名，缺省取全局默认。"""
+    radius = default_radius
+    if isinstance(raw_point, dict):
+        radius = float(raw_point.get("R", raw_point.get("radius_m", default_radius)))
+    if radius < 0.0:
+        raise ValueError(f"{field_name}.R must be >= 0")
+    return radius
+
+
+def _same_xy(a: PosInEarthS, b: PosInEarthS) -> bool:
+    """判断两点水平面是否重合。注意：仅比较东/北，用于退化段保护。"""
+    return abs(a.east - b.east) <= 1e-9 and abs(a.north - b.north) <= 1e-9
+
+
+def _straight_wayline(idx: int, start: PosInEarthS, end: PosInEarthS, speed: float) -> WayLineS:
+    """构造直线航段。注意：首末点深拷贝，避免与相邻段共享引用。"""
+    return WayLineS(
+        idx=idx,
+        start=WayPointS(idx=idx, pos=PosInEarthS(start.east, start.north, start.h)),
+        end=WayPointS(idx=idx + 1, pos=PosInEarthS(end.east, end.north, end.h)),
+        vdCmd=speed,
+        radius=0.0,
+    )
+
+
+def _arc_wayline(
+    idx: int, t1: PosInEarthS, t2: PosInEarthS, speed: float, radius: float, center: PosInEarthS, turn_sign: float
+) -> WayLineS:
+    """构造圆弧航段。注意：start/end 为切点，center 为圆心，turnSign 为转向。"""
+    return WayLineS(
+        idx=idx,
+        start=WayPointS(idx=idx, pos=PosInEarthS(t1.east, t1.north, t1.h)),
+        end=WayPointS(idx=idx + 1, pos=PosInEarthS(t2.east, t2.north, t2.h)),
+        vdCmd=speed,
+        radius=radius,
+        center=PosInEarthS(center.east, center.north, center.h),
+        turnSign=turn_sign,
+    )
+
+
+def _waylines_from_waypoints(
+    raw_waypoints: object, route_defaults: dict[str, object], *, insert_arcs: bool = True
+) -> list[WayLineS]:
+    """把航点序列转换为航段序列。注意：insert_arcs 时内部拐点 R>0 插入相切圆弧，否则只连直线。"""
     # 至少两个航点才能连成航线。
     if not isinstance(raw_waypoints, list) or len(raw_waypoints) < 2:
         raise ValueError("route.waypoints must contain at least two points")
-    # 速度/半径取全局默认；当前仅支持直线（radius 必须为 0）。
     speed = float(route_defaults.get("speed_mps", route_defaults.get("vdCmd", 8.0)))
-    radius = float(route_defaults.get("radius_m", route_defaults.get("radius", 0.0)))
     if speed < 0.0:
         raise ValueError("route.speed_mps must be non-negative")
-    if radius != 0.0:
-        raise ValueError("route.radius_m must be 0 for straight route")
+    # 全局默认转弯半径(可被单航点 R 覆盖)；首末航点的 R 无意义、被忽略。
+    default_r = float(route_defaults.get("radius_m", route_defaults.get("radius", 0.0)))
+    if default_r < 0.0:
+        raise ValueError("route.radius_m must be >= 0")
     points = [
         _route_point_from_config(raw_point, f"route.waypoints[{index}]")
         for index, raw_point in enumerate(raw_waypoints)
     ]
-    # 相邻航点两两成段；首尾重合的退化段非法。
-    lines: list[WayLineS] = []
-    for index, (start, end) in enumerate(zip(points, points[1:])):
-        if start.east == end.east and start.north == end.north and start.h == end.h:
+    radii = [
+        _waypoint_radius(raw_point, default_r, f"route.waypoints[{index}]")
+        for index, raw_point in enumerate(raw_waypoints)
+    ]
+    # 相邻原始航点不得重合。
+    for index in range(len(points) - 1):
+        if _same_xy(points[index], points[index + 1]) and points[index].h == points[index + 1].h:
             raise ValueError(f"route.waypoints[{index}] and route.waypoints[{index + 1}] must be different")
-        lines.append(
-            WayLineS(
-                idx=index,
-                start=WayPointS(idx=index, pos=start),
-                end=WayPointS(idx=index + 1, pos=end),
-                vdCmd=speed,
-                radius=radius,
-            )
-        )
+
+    lines: list[WayLineS] = []
+    cur_start = points[0]
+    n = len(points)
+    for index in range(1, n):
+        corner = points[index]
+        arc = None
+        # 仅在启用插弧、内部拐点且 R>0 时才尝试插圆弧(显示用航线 insert_arcs=False 跳过)。
+        if insert_arcs and index < n - 1 and radii[index] > 0.0:
+            arc = corner_arc(points[index - 1], corner, points[index + 1], radii[index])
+        if arc is not None:
+            t1, t2, center, turn_sign = arc
+            tangent_d = math.hypot(corner.east - t1.east, corner.north - t1.north)
+            in_leg = math.hypot(corner.east - cur_start.east, corner.north - cur_start.north)
+            out_leg = math.hypot(points[index + 1].east - corner.east, points[index + 1].north - corner.north)
+            # 切点须落在两条腿内，否则回退为普通拐点(直线)。
+            if tangent_d <= in_leg + 1e-6 and tangent_d <= out_leg + 1e-6:
+                if not _same_xy(cur_start, t1):
+                    lines.append(_straight_wayline(len(lines), cur_start, t1, speed))
+                lines.append(_arc_wayline(len(lines), t1, t2, speed, radii[index], center, turn_sign))
+                cur_start = t2
+                continue
+        # 无圆弧(直线/退化/不适配)：直接连到拐点。
+        lines.append(_straight_wayline(len(lines), cur_start, corner, speed))
+        cur_start = corner
     return lines
 
 
@@ -1039,6 +1102,7 @@ class SimulationController:
         self._node_roles: dict[str, str] = {}
         self._configured_links: list[_ConfiguredLink] = []
         self._leader_route: RouteS | None = None
+        self._display_route: RouteS | None = None  # 显示用原始航线(不插圆弧)，仅供 GUI 画航段
         self._current_controls: dict[str, AccelerationCommand] = {}
         self._control_diagnostics: dict[str, PosTrackDiagS] = {}
         self._config: dict[str, object] | None = None
@@ -1503,6 +1567,8 @@ class SimulationController:
         )
         leader_route = _build_leader_route(config)
         self._leader_route = leader_route
+        # 显示用航线不插圆弧：界面只体现 base 里的原始航段(圆弧仅长机跟踪内部使用)。
+        self._display_route = _build_leader_route(config, insert_arcs=False)
         # 为每个节点创建算法适配器（长机/僚机实体由角色决定）。
         self._node_algorithms = {
             node_id: _NodeAlgorithm(
@@ -1743,8 +1809,9 @@ class SimulationController:
         # 无算法或无长机航线时无航段可绘。
         if not self._node_algorithms or self._leader_route is None:
             return []
-        # 把长机航线的每个航段转为显示状态，供 GUI 画多段轨迹。
-        return [_route_state_from_wayline(line) for line in self._leader_route.lines]
+        # 显示用原始航段(不插圆弧的航点折线)：圆弧仅长机内部跟踪用，界面只画 base 里的航段。
+        display_route = self._display_route if self._display_route is not None else self._leader_route
+        return [_route_state_from_wayline(line) for line in display_route.lines]
 
     @staticmethod
     def _cross_track_error(state: AircraftState, route: RouteState | None) -> float | None:
