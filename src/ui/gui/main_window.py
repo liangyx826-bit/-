@@ -841,7 +841,7 @@ class TopView(QGraphicsView):
         self.offset = self._default_offset()
         self._fit_route_to_view()
         self.viewport().update()
-        # 依次通知：视图已变、来自“重置”动作、请求侧视图也重置高度范围。
+        # 依次通知：视图已变、来自“重置”动作、请求侧视图也自适应显示范围。
         self.viewChanged.emit()
         self.manualViewChanged.emit()
         self.resetViewRequested.emit()
@@ -1345,12 +1345,6 @@ class SideView(QWidget):
         self._manual_horizontal_view = False
         self._fit_horizontal_view()
         self._fit_altitude_view()
-        self.update()
-
-    def reset_altitude_view(self) -> None:
-        """重置侧视图高度方向显示范围。注意：保持当前横轴视野。"""
-        self.altitude_min = self.ALTITUDE_MIN_DEFAULT
-        self.altitude_max = self.ALTITUDE_MAX_DEFAULT
         self.update()
 
     def _map_x(self, x: float) -> float:
@@ -2599,7 +2593,7 @@ class MainWindow(QMainWindow):
 
     def _reset_view(self) -> None:
         """响应重置视图按钮。注意：同时重置俯视图和侧视图显示范围。"""
-        # 俯视图重置会经信号链触发侧视图高度复位，这里再补一次重绘保证及时刷新。
+        # 俯视图重置会经信号链触发侧视图自适应，这里再补一次重绘保证及时刷新。
         self.top_view.reset_view()
         self.side_view.update()
 
