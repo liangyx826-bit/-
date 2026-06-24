@@ -375,6 +375,7 @@ class ControllerSimulationAdapter:
         if result.code == "OK":
             self._trail_by_node.clear()
             self._last_xy_by_node.clear()
+            self.speed = self.controller.playback_rate
             # 把事件游标推到当前末尾，避免把加载前的旧事件当成新扰动消费。
             self._processed_event_count = len(self.controller.get_recent_events(limit=1000))
             self.disturbance = "无"
@@ -389,15 +390,7 @@ class ControllerSimulationAdapter:
 
     def pause(self) -> Snapshot:
         """暂停 ControllerSimulationAdapter 的运行流程。注意：只暂停调度，不清空当前状态。"""
-        snapshot = self.controller.get_snapshot()
-        # 同一个“暂停/继续”按钮：运行中则暂停，已暂停则继续，其余状态走暂停。
-        if snapshot.run_state == "RUNNING":
-            result = self.controller.pause()
-        elif snapshot.run_state == "PAUSED":
-            # UI 交互便利：暂停态下同一个按钮表示继续。
-            result = self.controller.start()
-        else:
-            result = self.controller.pause()
+        result = self.controller.pause()
         self.last_result_code = result.code
         self.last_result_message = result.message
         return self.snapshot()
@@ -415,6 +408,8 @@ class ControllerSimulationAdapter:
         self.last_result_code = result.code
         self.last_result_message = result.message
         if result.code == "OK":
+            # 控制器 reset 会按配置重建模块，需要把 UI 当前倍率重新下发给墙钟调度。
+            self.controller.set_playback_rate(self.speed)
             self._trail_by_node.clear()
             self._last_xy_by_node.clear()
             self.disturbance = "无"
@@ -1904,8 +1899,7 @@ class MainWindow(QMainWindow):
         timeline = QHBoxLayout()
         timeline.setContentsMargins(12, 6, 12, 6)
         self.timeline_label = QLabel("0.0 / 120s")
-        self.start_button = QPushButton("开始")
-        self.pause_button = QPushButton("暂停")
+        self.play_button = QPushButton("开始")
         self.step_button = QPushButton("单步")
         self.reset_button = QPushButton("重置")
         # 进度条用 0..1000 的千分刻度承载 time/duration 比例，便于平滑显示。
@@ -1913,12 +1907,11 @@ class MainWindow(QMainWindow):
         self.progress.setObjectName("progress")
         self.progress.setRange(0, 1000)
         self.progress.setTextVisible(False)
-        # 四个控制按钮分别绑定开始/暂停/单步/重置槽。
-        self.start_button.clicked.connect(self._start)
-        self.pause_button.clicked.connect(self._pause)
+        # 播放/暂停合并为一个按钮，文案随运行态切换为当前可执行动作。
+        self.play_button.clicked.connect(self._toggle_play_pause)
         self.step_button.clicked.connect(self._step)
         self.reset_button.clicked.connect(self._reset)
-        for widget in [self.timeline_label, self.start_button, self.pause_button, self.step_button, self.reset_button, self.progress]:
+        for widget in [self.timeline_label, self.play_button, self.step_button, self.reset_button, self.progress]:
             timeline.addWidget(widget)
         # 让进度条吃掉剩余横向空间。
         timeline.setStretchFactor(self.progress, 1)
@@ -2178,15 +2171,14 @@ class MainWindow(QMainWindow):
         self.progress.setValue(round(snapshot.time / snapshot.duration * 1000) if snapshot.duration else 0)
         # 依据运行态启停各按钮：未加载配置(UNLOADED)时全部相关操作不可用。
         config_loaded = snapshot.run_state != "UNLOADED"
-        self.start_button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
-        self.pause_button.setEnabled(snapshot.run_state in {"RUNNING", "PAUSED"})
+        self.play_button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
         self.step_button.setEnabled(snapshot.run_state in {"READY", "PAUSED"})
         self.reset_button.setEnabled(config_loaded)
         # 仿真结束后禁止再注入扰动。
         for button in self.disturbance_buttons:
             button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
-        # 暂停态下“开始”按钮文案改为“继续”。
-        self.start_button.setText("继续" if snapshot.run_state == "PAUSED" else "开始")
+        # 单个播放控制按钮始终显示“点下去会发生什么”。
+        self.play_button.setText({"RUNNING": "暂停", "PAUSED": "继续"}.get(snapshot.run_state, "开始"))
         # 把快照下发给两视图与状态表；仅在需要时让俯视图自适应铺满。
         self.top_view.set_snapshot(snapshot, fit_view=fit_top_view)
         self.side_view.set_snapshot(snapshot)
@@ -2226,6 +2218,14 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 self.link_table.setItem(row, column, QTableWidgetItem(value))
+
+    def _toggle_play_pause(self) -> None:
+        """响应播放/暂停按钮。注意：按钮文案显示下一步动作。"""
+        # RUNNING 下执行暂停，其余可用状态执行开始/继续；禁用态不会触发此槽。
+        if self.sim.snapshot().run_state == "RUNNING":
+            self._pause()
+        else:
+            self._start()
 
     def _start(self) -> None:
         """响应开始按钮并启动仿真。注意：需要同步按钮状态和日志。"""
@@ -2302,7 +2302,10 @@ class MainWindow(QMainWindow):
         """应用 config path 设置。注意：只修改对应显示或运行参数。"""
         # 切换配置前停掉定时器，加载后请求自适应铺满新场景。
         self.timer.stop()
-        self._update_snapshot(self.sim.load_config(path), fit_top_view=True)
+        snapshot = self.sim.load_config(path)
+        if self.sim.last_result_code == "OK":
+            self._sync_speed_controls(self.sim.speed)
+        self._update_snapshot(snapshot, fit_top_view=True)
         if self.sim.last_result_code == "OK":
             # 成功：更新配置名标签/提示，并按需把该路径记入 config.ini。
             config_path = Path(path).resolve()
@@ -2317,6 +2320,14 @@ class MainWindow(QMainWindow):
         else:
             # 失败只记录告警，不改动当前已加载配置。
             self._log("WARN", f"加载配置失败 {Path(path).name}: {self.sim.last_result_message}")
+
+    def _sync_speed_controls(self, speed: float) -> None:
+        """同步 speed controls 显示。注意：程序设置滑条时不重复下发倍率。"""
+        # 配置加载后控制器已持有倍率，这里只让滑条和文本追上当前真实倍率。
+        slider_value = max(self.speed_slider.minimum(), min(self.speed_slider.maximum(), round(speed * 10)))
+        with QSignalBlocker(self.speed_slider):
+            self.speed_slider.setValue(slider_value)
+        self.speed_label.setText(f"{speed:.1f}x")
 
     def _config_dialog_start_dir(self) -> Path:
         """处理 dialog start dir 配置路径。注意：兼容源码运行和打包运行路径。"""

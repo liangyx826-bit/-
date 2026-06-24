@@ -1022,6 +1022,18 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual([event.level for event in controller.get_recent_events(limit=1, min_level="WARN")], ["WARN"])
             controller.close()
 
+    def test_playback_rate_property_reflects_config_and_updates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_config(Path(tmp))
+            controller = SimulationController()
+
+            self.assertAlmostEqual(controller.playback_rate, 1.0)
+            self.assertEqual(controller.load_config(str(path)).code, "OK")
+            self.assertAlmostEqual(controller.playback_rate, 10.0)
+            self.assertEqual(controller.set_playback_rate(20.0).code, "OK")
+            self.assertAlmostEqual(controller.playback_rate, 20.0)
+            controller.close()
+
     def test_leader_formation_broadcast_reaches_follower_after_comm_latency(self) -> None:
         """LeaderEntity outbox broadcasts must pass through CommunicationChannel and arrive at followers."""
         config = {
