@@ -456,6 +456,7 @@ class SimulationControllerTests(unittest.TestCase):
         config = {
             "formation": {
                 "pattern": "TRIANGLE",
+                "coordinate_system": "x_forward_y_up_z_right",
                 "slots": [
                     {"node_id": "A01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
                     {"node_id": "A02", "x_m": -70.0, "y_m": 5.0, "z_m": -40.0},
@@ -474,6 +475,25 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(slots["A03"].x, -70.0)
         self.assertAlmostEqual(slots["A03"].y, -5.0)
         self.assertAlmostEqual(slots["A03"].z, 40.0)
+
+    def test_configured_formation_slots_require_axis_declaration(self) -> None:
+        """显式配置槽位时必须声明轴序，避免旧 y 侧向配置被按新语义静默接收。"""
+        nodes = [
+            {"node_id": "A01", "role": "leader"},
+            {"node_id": "A02", "role": "wingman"},
+        ]
+        config = {
+            "formation": {
+                "pattern": "TRIANGLE",
+                "slots": [
+                    {"node_id": "A01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
+                    {"node_id": "A02", "x_m": -30.0, "y_m": 20.0, "z_m": 0.0},
+                ],
+            }
+        }
+
+        with self.assertRaisesRegex(ValueError, "coordinate_system"):
+            _build_formation_comm_init(nodes, [], config)
 
     def test_default_triangle_slots_reject_extra_wingmen(self) -> None:
         """Default wedge geometry should fail fast when more wingmen need explicit slots."""
