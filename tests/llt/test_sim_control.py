@@ -224,6 +224,39 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(route.lines[1].end.pos.north, 80.0)
         self.assertTrue(all(line.vdCmd == 12.0 for line in route.lines))
 
+    def test_route_waypoints_radius_inserts_tangent_arc(self) -> None:
+        """内部拐点 R>0 时应在直线段间插入与两腿相切的圆弧段(东->北左转)。"""
+
+        route = _build_leader_route(
+            {
+                "route": {
+                    "speed_mps": 20.0,
+                    "waypoints": [
+                        {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 0.0},
+                        {"x_m": 2000.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 400.0},
+                        {"x_m": 2000.0, "y_m": 2000.0, "altitude_m": 1000.0, "R": 0.0},
+                    ],
+                }
+            }
+        )
+
+        # 直线(0,0)->(1600,0) + 圆弧(1600,0)->(2000,400) + 直线(2000,400)->(2000,2000)
+        self.assertEqual(len(route.lines), 3)
+        leg_in, arc, leg_out = route.lines
+        self.assertEqual(leg_in.radius, 0.0)
+        self.assertAlmostEqual(leg_in.end.pos.east, 1600.0)
+        self.assertAlmostEqual(leg_in.end.pos.north, 0.0)
+        self.assertAlmostEqual(arc.radius, 400.0)
+        self.assertAlmostEqual(arc.turnSign, 1.0)  # 左转/逆时针
+        self.assertAlmostEqual(arc.start.pos.east, 1600.0)
+        self.assertAlmostEqual(arc.end.pos.east, 2000.0)
+        self.assertAlmostEqual(arc.end.pos.north, 400.0)
+        self.assertAlmostEqual(arc.center.east, 1600.0)
+        self.assertAlmostEqual(arc.center.north, 400.0)
+        self.assertEqual(leg_out.radius, 0.0)
+        self.assertAlmostEqual(leg_out.start.pos.north, 400.0)
+        self.assertAlmostEqual(leg_out.end.pos.north, 2000.0)
+
     def test_snapshot_exposes_full_reference_route_segments(self) -> None:
         """Snapshot should expose the complete configured route for UI drawing, not only the active segment."""
 

@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 
 from src.algorithm.context.leaf_types import MotionProfS, PosInEarthS, RouteS, WayLineS, WayPointS, copy_wayline
+from src.algorithm.units.algo import arc_path
 from src.algorithm.units.process.tra_plan.base import TraPlanBase, TraPlanInitS, TraPlanInputS, TraPlanOutputS
 
 _GRAVITY_MPS2 = 9.80665  # 重力加速度，用于由速度和滚转角估算转弯半径
@@ -41,20 +42,24 @@ class LeaderRoute(TraPlanBase):
         """推进 LeaderRoute 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if y.wayLine is None:
             raise ValueError("LeaderRoute output port must be bound")
-        line = self._select_current_line(u.selfState)  # 据本机位置选定当前航段
-        copy_wayline(line, y.wayLine)  # 拷出，避免下游改写内部航线数据
+        index = self._select_current_index(u.selfState)  # 据本机位置选定当前航段下标
+        lines = self._route.lines
+        copy_wayline(lines[index], y.wayLine)  # 拷出，避免下游改写内部航线数据
+        # 同时给出下一航段(末段时退化为当前段)，供曲率前馈跨段前瞻采样。
+        if y.nextWayLine is not None:
+            copy_wayline(lines[min(index + 1, len(lines) - 1)], y.nextWayLine)
 
     def reset(self) -> None:
         """复位 LeaderRoute 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         self._current_index = 0
 
-    def _select_current_line(self, self_state: MotionProfS | None) -> WayLineS:
-        """选择当前应跟踪的航段。注意：会按待飞距和转弯提前量切换到下一段。"""
+    def _select_current_index(self, self_state: MotionProfS | None) -> int:
+        """选择当前应跟踪的航段下标。注意：会按待飞距和转弯提前量切换到下一段。"""
         lines = self._route.lines
         if not lines:
             raise ValueError("route must contain at least one wayLine")
         if self_state is None:
-            return lines[self._current_index]  # 无状态反馈时保持当前段不切换
+            return self._current_index  # 无状态反馈时保持当前段不切换
         # 可能一帧跨过多段：循环前推，直到当前段不再满足切换条件或已是末段
         while self._current_index < len(lines) - 1 and _should_switch_to_next_line(
             lines[self._current_index],
@@ -62,7 +67,7 @@ class LeaderRoute(TraPlanBase):
             self_state,
         ):
             self._current_index += 1
-        return lines[self._current_index]
+        return self._current_index
 
 
 def _default_route() -> RouteS:
@@ -113,14 +118,21 @@ def _line_progress(line: WayLineS, self_state: MotionProfS) -> float:
 
 
 def _should_switch_to_next_line(line: WayLineS, next_line: WayLineS, self_state: MotionProfS) -> bool:
-    """判断是否提前切换到下一航段。注意：切换距离使用转弯半径乘航向夹角半角正切。"""
-    # 已越过终点(进度>=1)立即切换，兜底防止卡在末点附近
+    """判断是否切换到下一航段。注意：圆弧段及"下一段为圆弧"时按到段末(进度>=1)切，不提前。"""
+    # 圆弧段：扫掠进度到末端即切，不做提前量。
+    if line.radius > 0.0:
+        _, _, progress, _ = arc_path.project_arc(line, self_state.pos.east, self_state.pos.north)
+        return progress >= 1.0
+    # 直线段：越过终点立即切。
     if _line_progress(line, self_state) >= 1.0:
         return True
+    # 下一段是圆弧：圆弧切入点已是提前量，到切点(进度>=1)再切，不再额外提前。
+    if next_line.radius > 0.0:
+        return False
     distance_to_go = _horizontal_distance_to_go(line, self_state)
     if distance_to_go is None:
         return False  # 退化航段无法判断剩余距离，保持不切换
-    # 剩余待飞距进入转弯提前量时切换，让转弯起点恰好对准航段拐点
+    # 直线->直线：保留原提前切段逻辑，让转弯起点恰好对准航段拐点。
     return distance_to_go <= _turn_switch_distance_m(line, next_line)
 
 

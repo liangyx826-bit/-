@@ -28,6 +28,7 @@ class TraPlanOutputS:
     """轨迹规划输出端口。注意：wayLine 为本帧选定的待跟踪航段。"""
 
     wayLine: WayLineS | None = None  # 输出的当前航段
+    nextWayLine: WayLineS | None = None  # 下一航段(末段时与当前段相同)，供曲率前馈前瞻
 
 
 class TraPlanBase:

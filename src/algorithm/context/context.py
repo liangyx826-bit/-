@@ -22,6 +22,7 @@ class FormContextS:
     cmd: FormSnapshotS = field(default_factory=FormSnapshotS)  # 当前编队指令(任务单元产出)
     state: list[FormSnapshotS] = field(default_factory=list)  # 历史/各机状态快照列表
     wayLine: WayLineS = field(default_factory=WayLineS)  # 当前跟踪航段(航路规划产出)
+    nextWayLine: WayLineS = field(default_factory=WayLineS)  # 下一航段(供曲率前馈前瞻跨段采样)
     leaderState: MotionProfS = field(default_factory=MotionProfS)  # 长机状态(僚机由入站解析得到)
     selfCmd: MotionProfS = field(default_factory=MotionProfS)  # 本机目标运动状态(位置解算产出)
     selfState: MotionProfS = field(default_factory=MotionProfS)  # 本机实测运动状态(外部反馈)
@@ -36,6 +37,7 @@ def reset_context(dst: FormContextS) -> None:
     copy_snapshot(fresh.cmd, dst.cmd)  # 重置编队指令
     dst.state.clear()  # 清空状态快照列表
     copy_wayline(fresh.wayLine, dst.wayLine)  # 重置当前航段
+    copy_wayline(fresh.nextWayLine, dst.nextWayLine)  # 重置下一航段
     copy_motion(fresh.leaderState, dst.leaderState)  # 重置长机状态
     copy_motion(fresh.selfCmd, dst.selfCmd)  # 重置本机目标状态
     copy_motion(fresh.selfState, dst.selfState)  # 重置本机实测状态

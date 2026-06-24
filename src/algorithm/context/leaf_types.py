@@ -133,17 +133,20 @@ class WayPointS:
 
     idx: int = 0  # 航路点序号
     pos: PosInEarthS = field(default_factory=PosInEarthS)  # 航路点地理系位置
+    r: float = 0.0  # 该航点交接处的预期转弯半径，米；0 表示该拐点不做圆弧过渡
 
 
 @dataclass
 class WayLineS:
-    """单段直线航段。注意：算法按 start->end 跟踪并据 radius 决定转弯提前量。"""
+    """单段航段：radius=0 为直线，radius>0 为圆弧。注意：圆弧用 start/end=切点、center=圆心、turnSign=转向。"""
 
     idx: int = 0  # 航段序号
-    start: WayPointS = field(default_factory=WayPointS)  # 航段起点
-    end: WayPointS = field(default_factory=WayPointS)  # 航段终点
+    start: WayPointS = field(default_factory=WayPointS)  # 航段起点(圆弧为切入点)
+    end: WayPointS = field(default_factory=WayPointS)  # 航段终点(圆弧为切出点)
     vdCmd: float = 0.0  # 该航段地速指令，米每秒
-    radius: float = 0.0  # 转弯半径，米；0 表示直线无转弯
+    radius: float = 0.0  # 转弯半径，米；0 表示直线，>0 表示圆弧
+    center: PosInEarthS = field(default_factory=PosInEarthS)  # 圆弧圆心(仅 radius>0 有意义)
+    turnSign: float = 0.0  # 转向：+1 左转/逆时针、-1 右转/顺时针、0 直线
 
 
 @dataclass
@@ -204,10 +207,14 @@ def copy_wayline(src: WayLineS, dst: WayLineS) -> None:
     dst.idx = src.idx
     dst.start.idx = src.start.idx
     copy_position(src.start.pos, dst.start.pos)
+    dst.start.r = src.start.r
     dst.end.idx = src.end.idx
     copy_position(src.end.pos, dst.end.pos)
+    dst.end.r = src.end.r
     dst.vdCmd = src.vdCmd
     dst.radius = src.radius
+    copy_position(src.center, dst.center)
+    dst.turnSign = src.turnSign
 
 
 def copy_snapshot(src: FormSnapshotS, dst: FormSnapshotS) -> None:

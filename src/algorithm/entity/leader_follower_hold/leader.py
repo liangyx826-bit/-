@@ -19,6 +19,7 @@ from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutp
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
 
 _LEADER_L1_DISTANCE_M = 200.0 # 配置为0，则关闭L1前瞻航迹插值，直接按航段起点/终点位置解算航迹。
+_LEADER_FF_LEAD_TIME_S = 0.5 # 曲率前馈前瞻时间 σ(秒)，前瞻窗长 L2=σ·vd；配为0则关闭曲率前馈。调参旋钮。
 
 
 class LeaderEntity(EntityBase):
@@ -41,7 +42,7 @@ class LeaderEntity(EntityBase):
         # 各单元一次性初始化；航路规划注入预置航线，广播注入本机 id 与拓扑
         self._task.init(None)
         self._tra_plan.init(LeaderRouteInitS(cfg.route))
-        self._pos_calc.init(RouteInterpInitS(lookAheadDistance=_LEADER_L1_DISTANCE_M))
+        self._pos_calc.init(RouteInterpInitS(lookAheadDistance=_LEADER_L1_DISTANCE_M, leadTimeS=_LEADER_FF_LEAD_TIME_S))
         self._pos_track.init(_default_tracker_init(cfg.control_period_s))
         self._outbound.init(OutboundInitS(cfg.selfInit.id, cfg.commInit.netWork))
 
@@ -50,8 +51,10 @@ class LeaderEntity(EntityBase):
         self._task_y = FormationTaskOutputS(cmd=self.cxt.cmd)
         # 航路规划读编队指令与本机状态，输出当前航段写回黑板的 wayLine
         self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
-        self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine)
-        self._pos_calc_u = RouteInterpInputS(selfState=self.cxt.selfState, wayLine=self.cxt.wayLine)
+        self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine, nextWayLine=self.cxt.nextWayLine)
+        self._pos_calc_u = RouteInterpInputS(
+            selfState=self.cxt.selfState, wayLine=self.cxt.wayLine, nextWayLine=self.cxt.nextWayLine
+        )
         self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)
         self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
         self._pos_track_diag = PosTrackDiagS()
