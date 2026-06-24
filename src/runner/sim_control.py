@@ -1035,6 +1035,13 @@ class SimulationController:
         self._stop_requested = threading.Event()
         self._closed = False
 
+    @property
+    def playback_rate(self) -> float:
+        """返回当前播放倍率。注意：只反映墙钟调度倍率，不改变仿真步长。"""
+
+        with self._lock:
+            return self._playback_rate
+
     def load_config(self, path: str) -> CommandResult:
         """读取并解析仿真配置文件。注意：文件路径由调用方保证存在且可读。"""
 

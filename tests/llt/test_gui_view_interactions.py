@@ -84,6 +84,15 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertEqual(self.window.speed_label.text(), "20.0x")
         self.assertAlmostEqual(self.window.sim.speed, 20.0)
+        self.assertAlmostEqual(self.window.sim.controller.playback_rate, 20.0)
+
+    def test_load_config_syncs_playback_rate_to_slider(self) -> None:
+        self._load_ui_config(playback_rate=2.0)
+
+        self.assertEqual(self.window.speed_slider.value(), 20)
+        self.assertEqual(self.window.speed_label.text(), "2.0x")
+        self.assertAlmostEqual(self.window.sim.speed, 2.0)
+        self.assertAlmostEqual(self.window.sim.controller.playback_rate, 2.0)
 
     def test_reset_keeps_current_playback_rate_after_slider_change(self) -> None:
         self._load_ui_config()
@@ -97,7 +106,18 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertEqual(self.window.speed_label.text(), "20.0x")
         self.assertAlmostEqual(self.window.sim.speed, 20.0)
-        self.assertAlmostEqual(self.window.sim.controller._playback_rate, 20.0)
+        self.assertAlmostEqual(self.window.sim.controller.playback_rate, 20.0)
+
+    def test_adapter_pause_does_not_resume_from_paused_state(self) -> None:
+        self._load_ui_config()
+        self.window.sim.start()
+        self._wait_for_controller_time()
+
+        paused = self.window.sim.pause()
+        paused_again = self.window.sim.pause()
+
+        self.assertEqual(paused.run_state, "PAUSED")
+        self.assertEqual(paused_again.run_state, "PAUSED")
 
     def test_side_grid_uses_side_horizontal_mapping(self) -> None:
         self.window.side_view.snapshot = None
@@ -355,7 +375,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.sim.controller.get_snapshot().run_state, "UNLOADED")
         self.assertEqual(self.window.node_table.rowCount(), 0)
         self.assertEqual(self.window.link_table.rowCount(), 0)
-        self.assertFalse(self.window.start_button.isEnabled())
+        self.assertFalse(self.window.play_button.isEnabled())
         self.assertFalse(self.window.step_button.isEnabled())
         self.assertFalse(self.window.reset_button.isEnabled())
         self.assertTrue(all(not button.isEnabled() for button in self.window.disturbance_buttons))
@@ -368,29 +388,29 @@ class GuiViewInteractionTests(unittest.TestCase):
 
     def test_play_pause_button_toggles_real_controller_snapshot(self) -> None:
         self._load_ui_config()
-        self.assertEqual(self.window.start_button.text(), "开始")
+        self.assertEqual(self.window.play_button.text(), "开始")
 
-        self.window.start_button.click()
+        self.window.play_button.click()
         self.app.processEvents()
         running_snapshot = self._wait_for_controller_time()
 
         self.assertEqual(running_snapshot.run_state, "RUNNING")
         self.assertGreater(running_snapshot.time_s, 0.0)
-        self.assertEqual(self.window.start_button.text(), "暂停")
+        self.assertEqual(self.window.play_button.text(), "暂停")
 
-        self.window.start_button.click()
+        self.window.play_button.click()
         self.app.processEvents()
         paused_snapshot = self.window.sim.controller.get_snapshot()
 
         self.assertEqual(paused_snapshot.run_state, "PAUSED")
-        self.assertEqual(self.window.start_button.text(), "继续")
+        self.assertEqual(self.window.play_button.text(), "继续")
 
-        self.window.start_button.click()
+        self.window.play_button.click()
         self.app.processEvents()
         resumed_snapshot = self.window.sim.controller.get_snapshot()
 
         self.assertEqual(resumed_snapshot.run_state, "RUNNING")
-        self.assertEqual(self.window.start_button.text(), "暂停")
+        self.assertEqual(self.window.play_button.text(), "暂停")
 
     def test_disturbance_label_clears_after_duration(self) -> None:
         self._load_ui_config()
@@ -702,6 +722,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         *,
         duration_s: float = 0.05,
         step_s: float = 0.005,
+        playback_rate: float = 10.0,
         nodes: list[dict[str, object]] | None = None,
         links: list[dict[str, object]] | None = None,
         route: dict[str, object] | None = None,
@@ -709,7 +730,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         config = {
             "duration_s": duration_s,
             "step_s": step_s,
-            "playback_rate": 10.0,
+            "playback_rate": playback_rate,
             "nodes": nodes or [
                 {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0},
                 {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1215.0},
