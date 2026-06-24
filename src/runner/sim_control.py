@@ -69,6 +69,8 @@ _COMM_DECIMATION = 2
 _SNAPSHOT_DECIMATION = 2
 _MIN_PLAYBACK_RATE = 0.1
 _MAX_PLAYBACK_RATE = 20.0
+_RUN_LOOP_SLEEP_SLICE_S = 0.005
+_MAX_RUN_LOOP_BATCH_TICKS = 100
 
 
 @dataclass(frozen=True)
@@ -1466,30 +1468,51 @@ class SimulationController:
     def _run_loop(self) -> None:
         """后台线程主循环。注意：所有共享状态访问必须受锁保护。"""
         current = threading.current_thread()
+        last_wall_s = time.perf_counter()
+        sim_budget_s = 0.0
+        force_first_tick = True
         try:
-            # 直到收到停止请求；每圈推进一个 tick 并按墙钟节流以贴近实时倍率。
+            # 直到收到停止请求；按累计墙钟时间批量补拍，避免高倍率下依赖亚毫秒 sleep。
             while not self._stop_requested.is_set():
-                start_wall_s = time.monotonic()
+                now_wall_s = time.perf_counter()
+                wall_delta_s = max(0.0, now_wall_s - last_wall_s)
+                last_wall_s = now_wall_s
+                snapshots_to_notify: list[SimulationSnapshot] = []
+                should_sleep = False
                 with self._lock:
                     # 运行态被外部改为非 RUNNING（暂停/结束）时退出循环。
                     if self._run_state != "RUNNING":
                         break
-                    try:
-                        snapshot = self._tick_unlocked()
-                    except Exception as exc:  # noqa: BLE001
-                        # tick 出错不崩线程：记录错误、转入暂停并产出一帧快照便于排查。
-                        self._append_event_unlocked("ERROR", "SimControl", f"tick failed: {exc}")
-                        self._run_state = "PAUSED"
-                        snapshot = self._make_snapshot_unlocked()
+                    step_s = self._step_s
+                    playback_rate = self._playback_rate
+                    sim_budget_s += wall_delta_s * playback_rate
+                    if force_first_tick and sim_budget_s < step_s:
+                        sim_budget_s = step_s
+                    force_first_tick = False
+
+                    ticks_due = min(int(sim_budget_s / step_s), _MAX_RUN_LOOP_BATCH_TICKS)
+                    if ticks_due <= 0:
+                        should_sleep = True
+                    for _ in range(ticks_due):
+                        try:
+                            snapshot = self._tick_unlocked()
+                        except Exception as exc:  # noqa: BLE001
+                            # tick 出错不崩线程：记录错误、转入暂停并产出一帧快照便于排查。
+                            self._append_event_unlocked("ERROR", "SimControl", f"tick failed: {exc}")
+                            self._run_state = "PAUSED"
+                            snapshot = self._make_snapshot_unlocked()
+                        sim_budget_s = max(0.0, sim_budget_s - step_s)
+                        if snapshot is not None:
+                            snapshots_to_notify.append(snapshot)
+                        if self._run_state != "RUNNING":
+                            break
+                    if self._run_state == "RUNNING" and sim_budget_s < step_s:
+                        should_sleep = True
                 # 在锁外通知订阅者，避免回调阻塞持锁路径。
-                if snapshot is not None:
+                for snapshot in snapshots_to_notify:
                     self._notify_subscribers(snapshot)
-                with self._lock:
-                    # 目标墙钟间隔 = 仿真步长 / 倍率：倍率越大睡得越短，仿真越快。
-                    interval_s = self._step_s / self._playback_rate
-                # 扣除本圈实际耗时后再睡，使每圈节奏稳定贴近 interval_s。
-                elapsed_s = time.monotonic() - start_wall_s
-                time.sleep(max(0.0, interval_s - elapsed_s))
+                if should_sleep:
+                    time.sleep(_RUN_LOOP_SLEEP_SLICE_S)
         finally:
             with self._lock:
                 # 仅当自己仍是登记的工作线程时才清空引用，避免误清新线程。

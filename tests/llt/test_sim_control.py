@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.algorithm.context.leaf_types import FormPatE
 from src.environment.model import AircraftState
@@ -1157,6 +1158,41 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(controller.playback_rate, 10.0)
             self.assertEqual(controller.set_playback_rate(20.0).code, "OK")
             self.assertAlmostEqual(controller.playback_rate, 20.0)
+            controller.close()
+
+    def test_run_loop_batches_ticks_after_wall_clock_delay(self) -> None:
+        """后台调度晚醒后应按累计墙钟时间批量补拍，而不是逐拍亚毫秒睡眠。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp), duration_s=0.1, step_s=0.005)))
+            controller.set_playback_rate(20.0)
+            # 本测试只验证调度节奏，关闭文件落盘避免临时日志影响断言。
+            controller._logger._file_logging_disabled = True
+            fake_now_s = 0.0
+            sleeps: list[float] = []
+
+            def fake_clock() -> float:
+                return fake_now_s
+
+            def fake_sleep(seconds: float) -> None:
+                nonlocal fake_now_s
+                sleeps.append(seconds)
+                fake_now_s += seconds
+
+            with patch("src.runner.sim_control.time.perf_counter", fake_clock), patch(
+                "src.runner.sim_control.time.monotonic",
+                fake_clock,
+            ), patch("src.runner.sim_control.time.sleep", fake_sleep):
+                with controller._lock:
+                    controller._run_state = "RUNNING"
+                    controller._control_report = controller._derive_control_report_unlocked()
+                controller._run_loop()
+
+            snapshot = controller.get_snapshot()
+            self.assertEqual(snapshot.run_state, "FINISHED")
+            self.assertAlmostEqual(snapshot.time_s, 0.1)
+            self.assertLess(len(sleeps), 10)
+            self.assertGreater(max(sleeps), 0.001)
             controller.close()
 
     def test_leader_formation_broadcast_reaches_follower_after_comm_latency(self) -> None:
