@@ -257,6 +257,27 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(leg_out.start.pos.north, 400.0)
         self.assertAlmostEqual(leg_out.end.pos.north, 2000.0)
 
+    def test_display_route_keeps_original_segments_without_arc(self) -> None:
+        """显示用航线(insert_arcs=False)应保留 base 原始航点折线、不插圆弧(界面只画原始航段)。"""
+        config = {
+            "route": {
+                "speed_mps": 20.0,
+                "waypoints": [
+                    {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 0.0},
+                    {"x_m": 2000.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 400.0},
+                    {"x_m": 2000.0, "y_m": 2000.0, "altitude_m": 1000.0, "R": 0.0},
+                ],
+            }
+        }
+        # 跟踪航线插圆弧(3 段)，显示航线不插(原始 2 直线段、含尖角)。
+        self.assertEqual(len(_build_leader_route(config).lines), 3)
+        display = _build_leader_route(config, insert_arcs=False)
+        self.assertEqual(len(display.lines), 2)
+        self.assertTrue(all(line.radius == 0.0 for line in display.lines))
+        self.assertAlmostEqual(display.lines[0].end.pos.east, 2000.0)
+        self.assertAlmostEqual(display.lines[0].end.pos.north, 0.0)
+        self.assertAlmostEqual(display.lines[1].end.pos.north, 2000.0)
+
     def test_snapshot_exposes_full_reference_route_segments(self) -> None:
         """Snapshot should expose the complete configured route for UI drawing, not only the active segment."""
 

@@ -387,8 +387,8 @@ def _float_from_keys(
     raise ValueError(f"{prefix}[{index}].{keys[0]} is required")
 
 
-def _build_leader_route(config: dict[str, object] | None = None) -> RouteS:
-    """根据配置生成长机航线。注意：支持多航点并转换为多航段。"""
+def _build_leader_route(config: dict[str, object] | None = None, *, insert_arcs: bool = True) -> RouteS:
+    """根据配置生成长机航线。注意：insert_arcs=False 时拐点不插圆弧(用于显示原始航段)。"""
     # 无 route 配置时用默认直线航线兜底。
     route_config = (config or {}).get("route")
     if route_config is None:
@@ -399,7 +399,7 @@ def _build_leader_route(config: dict[str, object] | None = None) -> RouteS:
     # 三种写法优先级：waypoints（航点序列）> segments/lines（航段列表）> 单段。
     waypoints = route_config.get("waypoints")
     if waypoints is not None:
-        return RouteS(lines=_waylines_from_waypoints(waypoints, route_config))
+        return RouteS(lines=_waylines_from_waypoints(waypoints, route_config, insert_arcs=insert_arcs))
 
     segments = route_config.get("segments", route_config.get("lines"))
     if segments is None:
@@ -455,8 +455,10 @@ def _arc_wayline(
     )
 
 
-def _waylines_from_waypoints(raw_waypoints: object, route_defaults: dict[str, object]) -> list[WayLineS]:
-    """把航点序列转换为航段序列。注意：内部拐点 R>0 时插入与两腿相切的圆弧段。"""
+def _waylines_from_waypoints(
+    raw_waypoints: object, route_defaults: dict[str, object], *, insert_arcs: bool = True
+) -> list[WayLineS]:
+    """把航点序列转换为航段序列。注意：insert_arcs 时内部拐点 R>0 插入相切圆弧，否则只连直线。"""
     # 至少两个航点才能连成航线。
     if not isinstance(raw_waypoints, list) or len(raw_waypoints) < 2:
         raise ValueError("route.waypoints must contain at least two points")
@@ -486,8 +488,8 @@ def _waylines_from_waypoints(raw_waypoints: object, route_defaults: dict[str, ob
     for index in range(1, n):
         corner = points[index]
         arc = None
-        # 仅内部拐点且 R>0 才尝试插圆弧。
-        if index < n - 1 and radii[index] > 0.0:
+        # 仅在启用插弧、内部拐点且 R>0 时才尝试插圆弧(显示用航线 insert_arcs=False 跳过)。
+        if insert_arcs and index < n - 1 and radii[index] > 0.0:
             arc = corner_arc(points[index - 1], corner, points[index + 1], radii[index])
         if arc is not None:
             t1, t2, center, turn_sign = arc
@@ -1100,6 +1102,7 @@ class SimulationController:
         self._node_roles: dict[str, str] = {}
         self._configured_links: list[_ConfiguredLink] = []
         self._leader_route: RouteS | None = None
+        self._display_route: RouteS | None = None  # 显示用原始航线(不插圆弧)，仅供 GUI 画航段
         self._current_controls: dict[str, AccelerationCommand] = {}
         self._control_diagnostics: dict[str, PosTrackDiagS] = {}
         self._config: dict[str, object] | None = None
@@ -1564,6 +1567,8 @@ class SimulationController:
         )
         leader_route = _build_leader_route(config)
         self._leader_route = leader_route
+        # 显示用航线不插圆弧：界面只体现 base 里的原始航段(圆弧仅长机跟踪内部使用)。
+        self._display_route = _build_leader_route(config, insert_arcs=False)
         # 为每个节点创建算法适配器（长机/僚机实体由角色决定）。
         self._node_algorithms = {
             node_id: _NodeAlgorithm(
@@ -1804,8 +1809,9 @@ class SimulationController:
         # 无算法或无长机航线时无航段可绘。
         if not self._node_algorithms or self._leader_route is None:
             return []
-        # 把长机航线的每个航段转为显示状态，供 GUI 画多段轨迹。
-        return [_route_state_from_wayline(line) for line in self._leader_route.lines]
+        # 显示用原始航段(不插圆弧的航点折线)：圆弧仅长机内部跟踪用，界面只画 base 里的航段。
+        display_route = self._display_route if self._display_route is not None else self._leader_route
+        return [_route_state_from_wayline(line) for line in display_route.lines]
 
     @staticmethod
     def _cross_track_error(state: AircraftState, route: RouteState | None) -> float | None:
