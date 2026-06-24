@@ -1861,10 +1861,10 @@ class SimulationController:
         # 退化航段（首尾重合）无法定义法向，返回 None。
         if length <= 1e-9:
             return None
-        # 单位法向量（航段方向逆时针旋转 90°）。
-        normal_x = -dy / length
-        normal_y = dx / length
-        # 侧偏 = 起点->节点向量在法向上的投影；正负表示位于航段哪一侧。
+        # 单位右法向量（航段方向顺时针旋转 90°），与航迹系 z 右侧向为正保持一致。
+        normal_x = dy / length
+        normal_y = -dx / length
+        # 侧偏 = 起点->节点向量在右法向上的投影；正值表示位于航迹右侧。
         return (state.x_m - route.start_x_m) * normal_x + (state.y_m - route.start_y_m) * normal_y
 
     @staticmethod

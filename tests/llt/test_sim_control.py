@@ -167,7 +167,7 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(route.end_x_m, 1000.0)
             self.assertAlmostEqual(route.end_y_m, 0.0)
             self.assertAlmostEqual(route.end_altitude_m, 1000.0)
-            self.assertAlmostEqual(leader.cross_track_error_m or 0.0, 260.0)
+            self.assertAlmostEqual(leader.cross_track_error_m or 0.0, -260.0)
             self.assertAlmostEqual(leader.distance_to_go_m or 0.0, 860.0)
             controller.close()
 
@@ -199,7 +199,7 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(route.end_x_m, 210.0)
             self.assertAlmostEqual(route.end_y_m, 20.0)
             self.assertAlmostEqual(route.end_altitude_m, 1100.0)
-            self.assertAlmostEqual(leader.cross_track_error_m or 0.0, 50.0)
+            self.assertAlmostEqual(leader.cross_track_error_m or 0.0, -50.0)
             self.assertAlmostEqual(leader.distance_to_go_m or 0.0, 150.0)
             controller.close()
 
@@ -288,6 +288,94 @@ class SimulationControllerTests(unittest.TestCase):
             0.0,
             delta=1e-9,
         )
+
+    def test_cross_track_error_positive_to_track_right_side(self) -> None:
+        """整体侧偏沿用航迹坐标系右侧向为正的符号约定。"""
+
+        eastbound_route = RouteState(
+            start_x_m=0.0,
+            start_y_m=0.0,
+            start_altitude_m=1000.0,
+            end_x_m=100.0,
+            end_y_m=0.0,
+            end_altitude_m=1000.0,
+        )
+        northbound_route = RouteState(
+            start_x_m=0.0,
+            start_y_m=0.0,
+            start_altitude_m=1000.0,
+            end_x_m=0.0,
+            end_y_m=100.0,
+            end_altitude_m=1000.0,
+        )
+
+        self.assertAlmostEqual(
+            SimulationController._cross_track_error(_aircraft_state("A01", 0.0, -10.0, 1000.0), eastbound_route) or 0.0,
+            10.0,
+        )
+        self.assertAlmostEqual(
+            SimulationController._cross_track_error(_aircraft_state("A01", 10.0, 0.0, 1000.0), northbound_route) or 0.0,
+            10.0,
+        )
+
+    def test_arc_route_cross_track_error_positive_to_track_right_side(self) -> None:
+        """圆弧段侧偏也应保持右侧向为正，避免转弯段和直线段反号。"""
+
+        left_arc = _build_leader_route(
+            {
+                "route": {
+                    "speed_mps": 20.0,
+                    "waypoints": [
+                        {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 0.0},
+                        {"x_m": 2000.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 400.0},
+                        {"x_m": 2000.0, "y_m": 2000.0, "altitude_m": 1000.0, "R": 0.0},
+                    ],
+                }
+            }
+        ).lines[1]
+        right_arc = _build_leader_route(
+            {
+                "route": {
+                    "speed_mps": 20.0,
+                    "waypoints": [
+                        {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 0.0},
+                        {"x_m": 2000.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 400.0},
+                        {"x_m": 2000.0, "y_m": -2000.0, "altitude_m": 1000.0, "R": 0.0},
+                    ],
+                }
+            }
+        ).lines[1]
+        left_route = _route_state_from_wayline(left_arc)
+        right_route = _route_state_from_wayline(right_arc)
+        left_outside = _aircraft_state(
+            "A01",
+            left_arc.center.east + (left_arc.radius + 10.0) / math.sqrt(2.0),
+            left_arc.center.north - (left_arc.radius + 10.0) / math.sqrt(2.0),
+            1000.0,
+        )
+        left_inside = _aircraft_state(
+            "A01",
+            left_arc.center.east + (left_arc.radius - 10.0) / math.sqrt(2.0),
+            left_arc.center.north - (left_arc.radius - 10.0) / math.sqrt(2.0),
+            1000.0,
+        )
+        right_inside = _aircraft_state(
+            "A01",
+            right_arc.center.east + (right_arc.radius - 10.0) / math.sqrt(2.0),
+            right_arc.center.north + (right_arc.radius - 10.0) / math.sqrt(2.0),
+            1000.0,
+        )
+        right_outside = _aircraft_state(
+            "A01",
+            right_arc.center.east + (right_arc.radius + 10.0) / math.sqrt(2.0),
+            right_arc.center.north + (right_arc.radius + 10.0) / math.sqrt(2.0),
+            1000.0,
+        )
+
+        self.assertAlmostEqual(SimulationController._cross_track_error(left_outside, left_route) or 0.0, 10.0)
+        self.assertAlmostEqual(SimulationController._cross_track_error(left_inside, left_route) or 0.0, -10.0)
+        self.assertAlmostEqual(SimulationController._cross_track_error(right_inside, right_route) or 0.0, 10.0)
+        self.assertAlmostEqual(SimulationController._cross_track_error(right_outside, right_route) or 0.0, -10.0)
 
     def test_display_route_keeps_original_segments_without_arc(self) -> None:
         """显示用航线(insert_arcs=False)应保留 base 原始航点折线、不插圆弧(界面只画原始航段)。"""
