@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QHeaderView,
+    QSizePolicy,
     QSlider,
     QSplitter,
     QSpinBox,
@@ -2030,9 +2031,9 @@ class MainWindow(QMainWindow):
         self.overall_table.setHorizontalHeaderLabels(["侧偏(m)", "待飞距(m)", "高度(m)"])
         self.link_table = QTableWidget(0, 5)
         self.link_table.setHorizontalHeaderLabels(["链路", "方向", "延迟", "丢包", "状态"])
-        self._configure_table(self.node_table, [48, 88, 88, 88, 50])
+        self._configure_table(self.node_table, [48, 88, 88, 88, 50], expandable=True)
         self._configure_table(self.overall_table, [82, 94, 82], height=78)
-        self._configure_table(self.link_table, [86, 52, 58, 50, 54])
+        self._configure_table(self.link_table, [86, 52, 58, 50, 54], expandable=True)
         node_title = QLabel("节点跟踪误差")
         node_title.setObjectName("sectionTitle")
         overall_title = QLabel("整体跟踪情况")
@@ -2043,16 +2044,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.overall_table)
         layout.addSpacing(8)
         layout.addWidget(node_title)
-        layout.addWidget(self.node_table)
+        layout.addWidget(self.node_table, 1)
         layout.addSpacing(8)
         layout.addWidget(link_title)
-        layout.addWidget(self.link_table)
-        layout.addStretch(1)
+        layout.addWidget(self.link_table, 1)
         return panel
 
-    def _configure_table(self, table: QTableWidget, widths: list[int], *, height: int = 138) -> None:
+    def _configure_table(
+        self, table: QTableWidget, widths: list[int], *, height: int = 138, expandable: bool = False
+    ) -> None:
         """配置状态表通用样式。注意：表格只读且不显示多余行号。"""
-        # 隐藏行号列；横向滚动条永远关闭（靠固定列宽控制），纵向按需出现。
+        # 隐藏行号列；横向滚动条默认关闭（靠列宽与末列拉伸控制），纵向按需出现。
         table.verticalHeader().setVisible(False)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -2063,15 +2065,22 @@ class MainWindow(QMainWindow):
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         header = table.horizontalHeader()
-        # 最后一列拉伸吃掉余宽；其余列固定为指定宽度。
-        header.setStretchLastSection(True)
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        for index, width in enumerate(widths):
+        # 最后一列拉伸吃掉余宽；其余列固定为指定最小宽度，避免表格内部留空。
+        header.setStretchLastSection(False)
+        for index, width in enumerate(widths[:-1]):
+            header.setSectionResizeMode(index, QHeaderView.ResizeMode.Fixed)
             table.setColumnWidth(index, width)
-        # 固定行高与表高，保证两张表布局稳定。
+        last_index = len(widths) - 1
+        table.setColumnWidth(last_index, widths[last_index])
+        header.setSectionResizeMode(last_index, QHeaderView.ResizeMode.Stretch)
+        # 固定行高；节点/链路表优先吃掉面板剩余高度，空间不足时再出现纵向滚动条。
         table.verticalHeader().setDefaultSectionSize(30)
         table.verticalHeader().setMinimumSectionSize(30)
-        table.setFixedHeight(height)
+        if expandable:
+            table.setMinimumHeight(height)
+            table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        else:
+            table.setFixedHeight(height)
 
     def _install_button_cursors(self) -> None:
         """为按钮安装手型光标。注意：只影响交互提示，不改变按钮逻辑。"""

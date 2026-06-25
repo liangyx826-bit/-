@@ -930,6 +930,12 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(statuses["A03"], "故障")
         self.assertEqual(statuses["A02"], "正常")
 
+    def test_status_tables_expand_to_use_panel_height_before_scrolling(self) -> None:
+        self.app.processEvents()
+
+        self.assertGreater(self.window.node_table.height(), 180)
+        self.assertGreater(self.window.link_table.height(), 180)
+
     def test_node_table_shows_track_errors_and_overall_table_uses_leader_route_metrics(self) -> None:
         snapshot = Snapshot(
             time=0.0,
@@ -987,6 +993,8 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.overall_table.item(0, 2).text(), "1200")
         self.assertEqual(self.window.node_table.horizontalScrollBar().maximum(), 0)
         self.assertEqual(self.window.overall_table.horizontalScrollBar().maximum(), 0)
+        self.assert_table_uses_full_width(self.window.node_table)
+        self.assert_table_uses_full_width(self.window.overall_table)
 
     def test_overall_table_uses_role_leader_when_leader_is_not_first_node(self) -> None:
         snapshot = Snapshot(
@@ -1048,6 +1056,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(directions["A01-A02"], "双向")
         self.assertEqual(directions["A02-A03"], "单向")
         self.assertEqual(self.window.link_table.horizontalScrollBar().maximum(), 0)
+        self.assert_table_uses_full_width(self.window.link_table)
 
     def test_duration_input_syncs_loaded_config_duration(self) -> None:
         self._load_ui_config(duration_s=2400.0)
@@ -1166,6 +1175,10 @@ class GuiViewInteractionTests(unittest.TestCase):
             abs(fitted_width - rect.width() * 0.80) <= 1.0
             or abs(fitted_height - rect.height() * 0.80) <= 1.0
         )
+
+    def assert_table_uses_full_width(self, table) -> None:  # noqa: ANN001
+        header_width = sum(table.columnWidth(column) for column in range(table.columnCount()))
+        self.assertGreaterEqual(header_width, table.viewport().width() - 1)
 
     def _write_config_file(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
