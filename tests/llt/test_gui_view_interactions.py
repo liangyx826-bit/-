@@ -308,6 +308,67 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertAlmostEqual(view.offset.x(), initial_offset.x(), delta=0.01)
         self.assertAlmostEqual(view.offset.y(), initial_offset.y(), delta=0.01)
 
+    def test_auto_center_moves_top_and_side_views_without_rescaling(self) -> None:
+        self._load_ui_config()
+        self.window.top_view.scale_value = 1.7
+        self.window.side_view.horizontal_scale = 1.4
+        self.window.side_view.altitude_min = 1180.0
+        self.window.side_view.altitude_max = 1260.0
+        self.window.auto_center.setChecked(True)
+        self.app.processEvents()
+
+        top_scale = self.window.top_view.scale_value
+        side_scale = self.window.side_view.horizontal_scale
+        altitude_span = self.window.side_view.altitude_max - self.window.side_view.altitude_min
+        snapshot = self.window.top_view.snapshot
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        moved_nodes = [
+            replace(node, x=node.x + 500.0, y=node.y + 80.0, altitude=node.altitude + 60.0)
+            for node in snapshot.nodes
+        ]
+        running_snapshot = replace(
+            snapshot,
+            time=snapshot.time + snapshot.step,
+            run_state="RUNNING",
+            nodes=moved_nodes,
+        )
+
+        self.window._update_snapshot(running_snapshot)
+        self.app.processEvents()
+
+        self.assertAlmostEqual(self.window.top_view.scale_value, top_scale)
+        self.assertAlmostEqual(self.window.side_view.horizontal_scale, side_scale)
+        self.assertAlmostEqual(self.window.side_view.altitude_max - self.window.side_view.altitude_min, altitude_span)
+        active = [node for node in moved_nodes if node.health == "normal"]
+        top_center_x = sum(node.x for node in active) / len(active)
+        top_center_y = sum(node.y for node in active) / len(active)
+        self.assertAlmostEqual(
+            self.window.top_view.offset.x(),
+            self.window.top_view.viewport().rect().width() / 2.0 - top_center_x * top_scale,
+            delta=0.01,
+        )
+        self.assertAlmostEqual(
+            self.window.top_view.offset.y(),
+            self.window.top_view.viewport().rect().height() / 2.0 - top_center_y * top_scale,
+            delta=0.01,
+        )
+        side_center_x = sum(
+            self.window.side_view._horizontal_for_point(node.x, node.y)
+            for node in active
+        ) / len(active)
+        side_center_altitude = sum(node.altitude for node in active) / len(active)
+        self.assertAlmostEqual(
+            self.window.side_view.horizontal_offset,
+            self.window.side_view.width() / 2.0 - side_center_x * side_scale,
+            delta=0.01,
+        )
+        self.assertAlmostEqual(
+            (self.window.side_view.altitude_min + self.window.side_view.altitude_max) / 2.0,
+            side_center_altitude,
+            delta=0.01,
+        )
+
     def test_reset_view_refits_route_and_aircraft_after_manual_view_change(self) -> None:
         self._load_ui_config(
             nodes=[

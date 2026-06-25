@@ -1234,6 +1234,7 @@ class SideView(QWidget):
         self.theme = THEMES["light"]
         self.show_grid = True
         self.segment_locked = True
+        self.auto_center = False
         self.view_angle_deg = 0.0
         self.horizontal_scale = 1.0
         self.horizontal_offset = 0.0
@@ -1255,7 +1256,20 @@ class SideView(QWidget):
     def set_snapshot(self, snapshot: Snapshot) -> None:
         """设置用于绘制的快照。注意：只更新显示缓存，不推进仿真。"""
         self.snapshot = snapshot
-        if not self._manual_horizontal_view:
+        if self.auto_center:
+            self._apply_auto_center()
+        elif not self._manual_horizontal_view:
+            self._fit_horizontal_view()
+        self.update()
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        """处理控件尺寸变化事件，使自动居中在新尺寸下保持居中。"""
+        super().resizeEvent(event)
+        if self.snapshot is None:
+            return
+        if self.auto_center:
+            self._apply_auto_center()
+        elif not self._manual_horizontal_view:
             self._fit_horizontal_view()
         self.update()
 
@@ -1369,6 +1383,21 @@ class SideView(QWidget):
         self._fit_horizontal_view()
         self._fit_altitude_view()
         self.update()
+
+    def _apply_auto_center(self) -> None:
+        """应用自动居中。注意：只平移横轴和高度轴，不改变缩放或高度跨度。"""
+        if self.snapshot is None or not self.snapshot.nodes:
+            return
+        # 与俯视图一致：优先以正常节点质心为中心，全部异常时退回全部节点。
+        active = [node for node in self.snapshot.nodes if node.health == "normal"]
+        if not active:
+            active = self.snapshot.nodes
+        center_x = sum(self._horizontal_for_point(node.x, node.y) for node in active) / len(active)
+        self.horizontal_offset = self.width() / 2.0 - center_x * self.horizontal_scale
+        altitude_span = max(1.0, self.altitude_max - self.altitude_min)
+        center_altitude = sum(node.altitude for node in active) / len(active)
+        self.altitude_min = center_altitude - altitude_span / 2.0
+        self.altitude_max = center_altitude + altitude_span / 2.0
 
     def _map_x(self, x: float) -> float:
         """映射侧视图横轴坐标。注意：横轴含义由当前模式决定。"""
@@ -2616,9 +2645,14 @@ class MainWindow(QMainWindow):
 
     def _on_auto_center_changed(self) -> None:
         """处理 auto center changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
-        # 同步开关状态到俯视图，并立即用当前快照触发一次居中重排。
-        self.top_view.auto_center = self.auto_center.isChecked()
-        self.top_view.set_snapshot(self.sim.snapshot())
+        # 同步开关状态到两个视图，并立即用当前快照触发一次居中重排。
+        checked = self.auto_center.isChecked()
+        snapshot = self.sim.snapshot()
+        self.top_view.auto_center = checked
+        self.side_view.auto_center = checked
+        self.top_view.set_snapshot(snapshot)
+        self.side_view.set_snapshot(snapshot)
+        self._sync_side_view_controls()
 
     def _on_grid_changed(self) -> None:
         """处理 grid changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
