@@ -286,11 +286,12 @@ def parse_avoidance_params(path: str) -> AvoidanceParams | None:
     if isinstance(raw_waypoints, list):
         for raw in raw_waypoints:
             if isinstance(raw, dict):
+                # 与控制器 _route_point_from_config 一致：兼容 x_m/east、y_m/north、altitude_m/h 两套字段名。
                 waypoints.append(
                     (
-                        _safe_float(raw.get("x_m", 0.0)),
-                        _safe_float(raw.get("y_m", 0.0)),
-                        _safe_float(raw.get("altitude_m", 0.0)),
+                        _safe_float(raw.get("x_m", raw.get("east", 0.0))),
+                        _safe_float(raw.get("y_m", raw.get("north", 0.0))),
+                        _safe_float(raw.get("altitude_m", raw.get("h", 0.0))),
                     )
                 )
     if len(waypoints) < 2:
@@ -2348,6 +2349,12 @@ class MainWindow(QMainWindow):
             return
         params = self._avoidance_params
         enabled = [_obstacle_view_to_backend(ob) for ob in self.obstacles if ob.enabled]
+        if not enabled:
+            # 未选择任何障碍：等价于维持原航线，不生成 R 圆弧航线，也不允许采用。
+            self._invalidate_preview()
+            self.avoidance_status.setText("未选择障碍 · 维持原航线")
+            self._log("Avoid", "未选择障碍，跳过生成（维持原航线）")
+            return
         try:
             result = plan_avoidance_route(
                 params.waypoints,

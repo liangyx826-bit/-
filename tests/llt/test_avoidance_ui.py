@@ -49,6 +49,17 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
         path = self._write({"avoidance": {"enabled": True}, "route": {"waypoints": [{"x_m": 0, "y_m": 0}]}})
         self.assertIsNone(parse_avoidance_params(path))
 
+    def test_east_north_aliases_parsed(self) -> None:
+        # 控制器兼容 east/north/h 字段名，UI 解析也应一致，否则会得到全零航点。
+        path = self._write({"avoidance": {"enabled": True}, "route": {"waypoints": [
+            {"east": 100.0, "north": 200.0, "h": 1000.0},
+            {"east": 300.0, "north": 400.0, "h": 1200.0},
+        ]}})
+        params = parse_avoidance_params(path)
+        self.assertIsNotNone(params)
+        self.assertEqual(params.waypoints[0], (100.0, 200.0, 1000.0))
+        self.assertEqual(params.waypoints[1], (300.0, 400.0, 1200.0))
+
 
 class RouteToPolylineTests(unittest.TestCase):
     def test_straight_route(self) -> None:
@@ -98,6 +109,18 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         self.assertIsNone(window._preview_route)
         self.assertIsNone(window.top_view.preview_route_polyline)
         self.assertFalse(window.adopt_route_button.isEnabled())
+
+    def test_no_enabled_obstacles_skips_generation(self) -> None:
+        # 取消勾选所有障碍后生成航线应维持原状：无预览、采用按钮禁用。
+        window = self._window()
+        for obstacle in window.obstacles:
+            if obstacle.enabled:
+                window._on_obstacle_toggled(obstacle, False)
+        window._generate_route()
+        self.assertIsNone(window._preview_route)
+        self.assertIsNone(window.top_view.preview_route_polyline)
+        self.assertFalse(window.adopt_route_button.isEnabled())
+        self.assertIn("未选择障碍", window.avoidance_status.text())
 
     def test_adopt_without_preview_is_noop(self) -> None:
         window = self._window()
