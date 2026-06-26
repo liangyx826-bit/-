@@ -59,6 +59,26 @@ class AnalysisSourceData:
     t_max: float = 0.0
 
 
+@dataclass(frozen=True)
+class AnalysisResult:
+    """单份输入源在指定时间段内的完整指标结果。"""
+
+    # 原始解析数据，保留 label、路径和节点样本供上层追溯。
+    source: AnalysisSourceData
+    # 规范化后的开始时间。
+    start_s: float
+    # 规范化后的结束时间。
+    end_s: float
+    # 本次结果覆盖的通道集合。
+    channels: tuple[AnalysisChannel, ...]
+    # 全机合并和逐飞机指标行，字段与 CSV 导出保持一致。
+    metric_rows: tuple[dict[str, object], ...]
+
+    def rows_for_scope(self, scope: str) -> tuple[dict[str, object], ...]:
+        """按 scope 返回指标行，例如 all 或 node。"""
+        return tuple(row for row in self.metric_rows if row["scope"] == scope)
+
+
 DEFAULT_CHANNELS: tuple[AnalysisChannel, ...] = (
     # 位置误差三个轴按航迹坐标系 x/y/z 顺序展示。
     AnalysisChannel("pos_x", "前向位置误差 x", "m", "track_pos_err_x_m"),
@@ -336,16 +356,37 @@ def metric_rows_for_source(
     channels: Iterable[AnalysisChannel] = DEFAULT_CHANNELS,
 ) -> list[dict[str, object]]:
     """生成单个输入源的全机和逐机指标行。"""
+    # 兼容旧调用点：内部统一走 AnalysisResult，避免两套行生成逻辑分叉。
+    return list(analyze_source(source, start_s, end_s, channels=channels).metric_rows)
+
+
+def analyze_source(
+    source: AnalysisSourceData,
+    start_s: float,
+    end_s: float,
+    *,
+    channels: Iterable[AnalysisChannel] = DEFAULT_CHANNELS,
+) -> AnalysisResult:
+    """生成单个输入源在指定时间段内的完整分析结果。"""
+    start, end = normalized_time_range(start_s, end_s)
+    channel_list = tuple(channels)
     rows: list[dict[str, object]] = []
     # 导出先写 all，再写逐机行，便于 Excel 中按 scope 筛选。
     targets = [("all", "all"), *[("node", node_id) for node_id in sorted(source.samples)]]
     for scope, node_id in targets:
+        # scope=all 使用合并样本；scope=node 使用单机样本，字段结构保持一致。
         target = "all" if scope == "all" else node_id
-        for channel in channels:
+        for channel in channel_list:
             # 导出覆盖全部通道，不受 GUI 绘图通道选择影响。
-            summary = summary_for(source, target, channel.key, start_s, end_s)
+            summary = summary_for(source, target, channel.key, start, end)
             rows.append(_metric_row(source, scope, node_id, channel, summary))
-    return rows
+    return AnalysisResult(
+        source=source,
+        start_s=start,
+        end_s=end,
+        channels=channel_list,
+        metric_rows=tuple(rows),
+    )
 
 
 def _metric_row(

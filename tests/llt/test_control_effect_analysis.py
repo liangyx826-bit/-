@@ -10,6 +10,7 @@ from pathlib import Path
 
 from src.data.control_effect_analysis import (
     DEFAULT_CHANNELS,
+    analyze_source,
     load_snapshot_samples,
     metric_rows_for_source,
     points_for,
@@ -57,6 +58,16 @@ class ControlEffectAnalysisTests(unittest.TestCase):
             self.assertEqual(rows[0]["scope"], "all")
             self.assertEqual(rows[0]["node_id"], "all")
             self.assertEqual(rows[0]["channel"], "前向位置误差 x")
+
+            result = analyze_source(source, 2.0, 0.0)
+            self.assertEqual(result.source, source)
+            self.assertEqual(result.start_s, 0.0)
+            self.assertEqual(result.end_s, 2.0)
+            self.assertEqual(result.channels, DEFAULT_CHANNELS)
+            self.assertEqual(len(result.metric_rows), 18)
+            self.assertEqual(len(result.rows_for_scope("all")), 6)
+            self.assertEqual(len(result.rows_for_scope("node")), 12)
+            self.assertEqual(result.rows_for_scope("node")[0]["node_id"], "A01")
 
             export_path = Path(tmp) / "metrics.csv"
             write_metrics_csv(export_path, [source], 0.0, 2.0)
