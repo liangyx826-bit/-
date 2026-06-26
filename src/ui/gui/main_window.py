@@ -2271,33 +2271,29 @@ class MainWindow(QMainWindow):
         param_title = QLabel("规划参数")
         param_title.setObjectName("paramTitle")
         avoidance_layout.addWidget(param_title)
-        # 规划参数（界面可调，生成时覆盖配置；改动使预览失效）。逐行“标签 + 数值框”，
-        # 标签独占左列、数值框拉伸占右列，避免窄面板下标签被挤没。
-        param_grid = QGridLayout()
-        param_grid.setContentsMargins(0, 4, 0, 2)
-        param_grid.setHorizontalSpacing(8)
-        param_grid.setVerticalSpacing(6)
-        param_grid.setColumnStretch(1, 1)
-        # 每个参数：中文标签 + 数值框 + 悬停说明（解释物理含义与影响）。
+        # 规划参数（界面可调，生成时覆盖配置；改动使预览失效）。
+        # 每个参数：中文标签在上、整宽数值框在下——与障碍行/按钮左对齐，窄面板下整齐不挤。
         tip_r = "转弯半径 R（米）：拐弯圆弧的半径。取大可降低偏航角速率，但圆弧鼓出更远、每个拐点占用航段更长。"
         tip_clear = "安全间距（米）：障碍向外膨胀的安全距离，航线与障碍至少保持这个间隔。"
         tip_leg = "航段余度 L（米）：相邻两个拐点之间保留的最短直线长度，保证两段转弯圆弧之间留有直线过渡。"
         self.turn_radius_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tip_r)
         self.clearance_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tip_clear)
         self.leg_margin_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tip_leg)
-        for row, (text, tip, spin) in enumerate(
-            (
-                ("转弯半径 R", tip_r, self.turn_radius_spin),
-                ("安全间距", tip_clear, self.clearance_spin),
-                ("航段余度 L", tip_leg, self.leg_margin_spin),
-            )
+        for text, tip, spin in (
+            ("转弯半径 R", tip_r, self.turn_radius_spin),
+            ("安全间距", tip_clear, self.clearance_spin),
+            ("航段余度 L", tip_leg, self.leg_margin_spin),
         ):
             label = QLabel(text)
             label.setObjectName("paramLabel")
             label.setToolTip(tip)
-            param_grid.addWidget(label, row, 0)
-            param_grid.addWidget(spin, row, 1)
-        avoidance_layout.addLayout(param_grid)
+            # 标签紧贴其数值框（间距 2），各参数组之间由外层 spacing 分隔。
+            field = QVBoxLayout()
+            field.setContentsMargins(0, 0, 0, 0)
+            field.setSpacing(2)
+            field.addWidget(label)
+            field.addWidget(spin)
+            avoidance_layout.addLayout(field)
         # 航段带圆弧：勾选=拐点输出圆弧；取消=外切线直连原拐点（不支持圆弧的下游）。
         self.allow_arc_check = QCheckBox("航段带圆弧")
         self.allow_arc_check.setToolTip("勾选：拐点输出圆弧段；取消：外切线直连原拐点（供不支持圆弧航段的下游）")
