@@ -1107,6 +1107,8 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.link_table.horizontalHeaderItem(1).text(), "方向")
         self.assertEqual(directions["A01-A02"], "双向")
         self.assertEqual(directions["A02-A03"], "单向")
+        self.assertEqual(self.window.link_table.item(0, 0).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
+        self.assertEqual(self.window.link_table.item(0, 4).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
         self.assertEqual(self.window.link_table.horizontalScrollBar().maximum(), 0)
         self.assert_table_uses_full_width(self.window.link_table)
 
