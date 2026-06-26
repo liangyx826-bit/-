@@ -131,6 +131,7 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 ```jsonc
 "avoidance": {
   "enabled": true,
+  "allow_arc": true,             // 交付编码：true=圆弧段；false=外切线直连原拐点（见 §4.3）
   "turn_radius_m": 200.0,        // R，人工配置（见 3.1）
   "leg_length_margin_m": 80.0,   // L，拐点间最短直线余度
   "clearance_m": 120.0,          // 障碍膨胀安全距离
@@ -154,6 +155,23 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 - 顶层 `enabled=false` 或 `obstacles` 为空 → 完全跳过避障，等价于现状。
 - 每个障碍带 `id`（界面列表显示 / 勾选用）与 `enabled`（默认勾选状态）。JSON 是**障碍库**，界面再从中**勾选本次启用的子集**——只对勾选项规划，未勾选的不参与（见 §6）。
 - 长机原航线取自 `route.waypoints[]`，航点坐标兼容 `x_m/east`、`y_m/north`、`altitude_m/h` 两套字段名（与控制器 `_route_point_from_config` 一致）。
+- `allow_arc`（默认 `true`）：交付编码开关，见 §4.3。
+
+### 4.3 交付编码：圆弧段 vs 外切线（`allow_arc`）
+
+部分客户的下游（自驾仪 / 航线格式）**不支持圆弧航段**，只接受直线段。`avoidance.allow_arc` 决定避障航线在拐点处**如何编码交付**，但**不改变可飞性判据**：
+
+| | `allow_arc: true`（默认） | `allow_arc: false`（外切线） |
+| --- | --- | --- |
+| 拐点编码 | 相切**圆弧** `WayLineS`（`radius=R`） | **外切线**：直连原拐点的两条直线（`radius=0`） |
+| §3.2 可飞性校验 | 按真实 R 校验（急拐 / 腿长 / 圆弧触障） | **同样按真实 R 校验**，不可飞两种编码都拒 |
+| 几何关系 | 圆弧内切于拐角，贴近被绕障碍一侧 | 顶点在转弯**外侧**，离障碍更远，更保守 |
+
+关键点:**`allow_arc` 只决定最终航段怎么编码,不决定能不能飞**。哪怕交付外切线折角,飞机过弯仍要半径 R 装得下、不触障——所以 `check_feasibility`（§3.2、§7.2）两种模式**完全一致地跑**,`allow_arc=false` 不会绕过校验。客户自驾仪到顶点按自身半径（≤R）圆一下,仍在已验证的安全包络内。
+
+**作用域仅避障输出**:`allow_arc` 不耦合长机配置航线（后者的圆弧由 `sim_control._build_leader_route(insert_arcs=...)` 各自管理）。
+
+> 实现：`points_to_route(..., insert_arcs=allow_arc)`——`False` 时所有拐点走"直连"分支,产出穿过各原拐点的纯直线折线;`plan_avoidance_route(..., allow_arc=...)` 透传,`check_feasibility` 调用不受影响。
 
 ---
 
@@ -180,10 +198,11 @@ def plan_avoidance_route(
     turn_radius_m, leg_margin_m, clearance_m, speed_mps,
     resolution_m, margin_m=0.0,
     arc_clearance=0.0, sample_step=None, max_turn_deg=150.0,
+    allow_arc=True,
 ) -> PlanResult
 ```
 
-**逐腿规划**保形：对原航线每条腿 `waypoints[i]→[i+1]` 独立跑 `plan_path → simplify_path`，再拼接（丢掉相邻腿重合的衔接点）、去重，整体做一次 `check_feasibility`，最后 `points_to_route` 生成圆弧航线。高度按水平里程在腿两端间线性插值。
+**逐腿规划**保形：对原航线每条腿 `waypoints[i]→[i+1]` 独立跑 `plan_path → simplify_path`，再拼接（丢掉相邻腿重合的衔接点）、去重，整体做一次 `check_feasibility`（始终按真实 R），最后 `points_to_route(insert_arcs=allow_arc)` 按交付编码生成圆弧或外切线航线（见 §4.3）。高度按水平里程在腿两端间线性插值。
 
 ```python
 @dataclass
