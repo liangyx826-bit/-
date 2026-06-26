@@ -31,6 +31,35 @@ _NEIGHBORS = (
     (-1, -1, _SQRT2),
 )
 
+
+def _direction_delta_deg(previous_dir: int, current_dir: int) -> float:
+    """返回两个 8 邻域方向之间的夹角，单位 degree。"""
+    p_di, p_dj, _ = _NEIGHBORS[previous_dir]
+    c_di, c_dj, _ = _NEIGHBORS[current_dir]
+    dot = p_di * c_di + p_dj * c_dj
+    p_len = hypot(p_di, p_dj)
+    c_len = hypot(c_di, c_dj)
+    return degrees(acos(max(-1.0, min(1.0, dot / (p_len * c_len)))))
+
+
+_DIRECTION_DELTA_DEG = tuple(
+    tuple(_direction_delta_deg(previous_dir, current_dir) for current_dir in range(len(_NEIGHBORS)))
+    for previous_dir in range(len(_NEIGHBORS))
+)
+
+
+def _heading_transition_penalty(
+    previous_dir: int | None,
+    current_dir: int,
+    turn_switch_penalty_m: float,
+    turn_angle_weight_m: float,
+) -> float:
+    """计算方向切换附加代价，单位是等效米。注意：夹角查预计算表，避免 A* 热循环反复算三角函数。"""
+    if previous_dir is None or previous_dir == current_dir:
+        return 0.0
+    return turn_switch_penalty_m + turn_angle_weight_m * (_DIRECTION_DELTA_DEG[previous_dir][current_dir] / 45.0)
+
+
 # A* 模块只承担离散拓扑规划，不在这里混入航迹圆弧或动力学约束。
 # 可飞性约束由 feasibility.py 负责，RouteS 转换由 path_to_route.py 负责。
 # 这里的网格坐标全部使用 east/north 平面坐标，避免和机体系 x/y/z 混淆。
@@ -201,12 +230,6 @@ def plan_path(
 
         return None
 
-    def turn_penalty(previous_dir: int | None, current_dir: int) -> float:
-        """计算方向切换附加代价，单位是等效米。"""
-        if previous_dir is None or previous_dir == current_dir:
-            return 0.0
-        return turn_switch_penalty_m + turn_angle_weight_m * (_direction_delta_deg(previous_dir, current_dir) / 45.0)
-
     start_state: State = (start_cell[0], start_cell[1], None)
     counter = 0
     open_heap_state: list[tuple[float, int, State]] = [(heuristic(*start_cell), counter, start_state)]
@@ -235,7 +258,9 @@ def plan_path(
             tentative = (
                 g_score_state[current]
                 + step * resolution_m
-                + turn_penalty(previous_dir, direction_index)
+                + _heading_transition_penalty(
+                    previous_dir, direction_index, turn_switch_penalty_m, turn_angle_weight_m
+                )
             )
             if tentative < g_score_state.get(next_state, float("inf")):
                 came_from_state[next_state] = current
@@ -244,16 +269,6 @@ def plan_path(
                 heapq.heappush(open_heap_state, (tentative + heuristic(ni, nj), counter, next_state))
 
     return None
-
-
-def _direction_delta_deg(previous_dir: int, current_dir: int) -> float:
-    """返回两个 8 邻域方向之间的夹角，单位 degree。"""
-    p_di, p_dj, _ = _NEIGHBORS[previous_dir]
-    c_di, c_dj, _ = _NEIGHBORS[current_dir]
-    dot = p_di * c_di + p_dj * c_dj
-    p_len = hypot(p_di, p_dj)
-    c_len = hypot(c_di, c_dj)
-    return degrees(acos(max(-1.0, min(1.0, dot / (p_len * c_len)))))
 
 
 def _reconstruct(

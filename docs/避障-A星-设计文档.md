@@ -135,6 +135,9 @@ def inside(obs, east, north, clearance=0.0) -> bool:
   "turn_radius_m": 200.0,        // R，人工配置（见 3.1）
   "leg_length_margin_m": 80.0,   // L，拐点间最短直线余度
   "clearance_m": 120.0,          // 障碍膨胀安全距离
+  "simplify_clearance_m": 120.0, // 视线去冗余安全距离；缺省回退到 clearance_m
+  "turn_switch_penalty_m": 0.0,  // A* 每次航向切换的等效米惩罚；0=旧行为
+  "turn_angle_weight_m": 0.0,    // A* 每 45° 航迹角变化的等效米惩罚；0=旧行为
   "grid": {
     "resolution_m": 20.0,        // 栅格分辨率，远小于 R
     "margin_m": 300.0            // 包围盒外扩
@@ -156,6 +159,9 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 - 每个障碍带 `id`（界面列表显示 / 勾选用）与 `enabled`（默认勾选状态）。JSON 是**障碍库**，界面再从中**勾选本次启用的子集**——只对勾选项规划，未勾选的不参与（见 §6）。
 - 长机原航线取自 `route.waypoints[]`，航点坐标兼容 `x_m/east`、`y_m/north`、`altitude_m/h` 两套字段名（与控制器 `_route_point_from_config` 一致）。
 - `allow_arc`（默认 `true`）：交付编码开关，见 §4.3。
+- `simplify_clearance_m`（缺省等于 `clearance_m`）：只影响 A* 输出后的 `simplify_path` 视线拉直。设为 `clearance_m` 时保持旧行为；调小可减少锯齿折线保留的中间拐点，但安全复核仍由后续可飞性校验兜底。
+- `turn_switch_penalty_m`（默认 `0.0`）：A* 搜索中每次 8 邻域方向切换的固定等效米代价，用于减少方向频繁切换导致的小直线段。
+- `turn_angle_weight_m`（默认 `0.0`）：A* 搜索中每 45° 航迹角变化的线性等效米代价，用于抑制少数过硬的大角度换向。两个航迹角惩罚都为 0 时，代码走旧 A* 分支，路径逐点兼容。
 
 ### 4.3 交付编码：圆弧段 vs 外切线（`allow_arc`）
 
@@ -196,13 +202,15 @@ src/algorithm/units/process/tra_plan/
 def plan_avoidance_route(
     waypoints, obstacles, *,
     turn_radius_m, leg_margin_m, clearance_m, speed_mps,
-    resolution_m, margin_m=0.0,
+    resolution_m, simplify_clearance_m=None,
+    turn_switch_penalty_m=0.0, turn_angle_weight_m=0.0,
+    margin_m=0.0,
     arc_clearance=0.0, sample_step=None, max_turn_deg=150.0,
     allow_arc=True,
 ) -> PlanResult
 ```
 
-**逐腿规划**保形：对原航线每条腿 `waypoints[i]→[i+1]` 独立跑 `plan_path → simplify_path`，再拼接（丢掉相邻腿重合的衔接点）、去重，整体做一次 `check_feasibility`（始终按真实 R），最后 `points_to_route(insert_arcs=allow_arc)` 按交付编码生成圆弧或外切线航线（见 §4.3）。高度按水平里程在腿两端间线性插值。
+**逐腿规划**保形：对原航线每条腿 `waypoints[i]→[i+1]` 独立跑 `plan_path → simplify_path`，再拼接（丢掉相邻腿重合的衔接点）、去重，整体做一次 `check_feasibility`（始终按真实 R），最后 `points_to_route(insert_arcs=allow_arc)` 按交付编码生成圆弧或外切线航线（见 §4.3）。高度按水平里程在腿两端间线性插值。`simplify_clearance_m=None` 时回退到 `clearance_m`，保证旧调用方不传新参数时仍使用原来的去冗余安全距离。
 
 ```python
 @dataclass
@@ -277,6 +285,7 @@ class PlanResult:
 ## 8. 风险与注意事项
 
 - **栅格分辨率 vs R**：`resolution_m` 必须远小于 R，否则圆弧拟合与去冗余不准；太细则 A\* 变慢。`astar.py` 设 `MAX_GRID_CELLS` 上限防止包围盒过大爆内存。
+- **航迹角惩罚开销**：`turn_switch_penalty_m` 或 `turn_angle_weight_m` 非 0 时，A* 状态从 `(i,j)` 扩展为 `(i,j,入射方向)`，状态空间最多约 8 倍；两个值均为 0 时走旧分支避免额外开销。方向夹角只有 8×8 种组合，`astar.py` 在模块加载时预计算 `_DIRECTION_DELTA_DEG` 表，热循环中只查表计算惩罚，避免每次扩展重复 `acos/degrees/hypot`。
 - **膨胀与圆弧外凸**：绕障时圆弧在障碍外侧外凸，`clearance` 要留够；可飞性校验用**真实障碍**（`arc_clearance=0`）复核兜底。
 - **矩形膨胀近似**：轴对齐矩形外扩 `clearance` 为方角方框（真实为圆角矩形），方角误差由 `clearance` 吸收。
 - **圆弧采样步长**：校验把圆弧打散成点逐点判定，步长须**远小于最小障碍尺寸与 clearance**（`_default_sample_step` 据此取；视线检测用 `ceil` 保证步长是间距上界，不漏穿细障碍），否则可能在两采样点之间"穿过"细障碍。

@@ -6,6 +6,8 @@ import math
 import unittest
 
 from src.algorithm.units.process.tra_plan.avoidance.astar import (
+    _DIRECTION_DELTA_DEG,
+    _heading_transition_penalty,
     MAX_GRID_CELLS,
     compute_bounds,
     plan_path,
@@ -196,6 +198,23 @@ class AStarPlanPathTests(unittest.TestCase):
         path = plan_path((0.0, 0.0), (1000.0, 0.0), obstacles, resolution_m=20.0, clearance_m=clearance, margin_m=300.0)
         self.assertIsNotNone(path)
         self._assert_collision_free(path, obstacles, clearance)
+
+    def test_direction_delta_table_matches_expected_octant_angles(self) -> None:
+        self.assertEqual(len(_DIRECTION_DELTA_DEG), 8)
+        self.assertAlmostEqual(_DIRECTION_DELTA_DEG[0][0], 0.0)
+        self.assertAlmostEqual(_DIRECTION_DELTA_DEG[0][4], 45.0)
+        self.assertAlmostEqual(_DIRECTION_DELTA_DEG[0][2], 90.0)
+        self.assertAlmostEqual(_DIRECTION_DELTA_DEG[0][1], 180.0)
+        for previous in range(8):
+            for current in range(8):
+                self.assertAlmostEqual(_DIRECTION_DELTA_DEG[previous][current], _DIRECTION_DELTA_DEG[current][previous])
+
+    def test_heading_transition_penalty_uses_precomputed_angle_table(self) -> None:
+        self.assertEqual(_heading_transition_penalty(None, 0, 30.0, 20.0), 0.0)
+        self.assertEqual(_heading_transition_penalty(0, 0, 30.0, 20.0), 0.0)
+        self.assertAlmostEqual(_heading_transition_penalty(0, 4, 30.0, 20.0), 50.0)
+        self.assertAlmostEqual(_heading_transition_penalty(0, 2, 30.0, 20.0), 70.0)
+        self.assertAlmostEqual(_heading_transition_penalty(0, 1, 30.0, 20.0), 110.0)
 
     def test_zero_heading_penalties_match_legacy_path(self) -> None:
         obstacles = _gapped_wall_obstacles(-30.0)
