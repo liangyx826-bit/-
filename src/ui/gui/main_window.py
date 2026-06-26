@@ -14,9 +14,11 @@ from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPainterPath,
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
+    QAbstractSpinBox,
     QApplication,
     QCheckBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -264,6 +266,7 @@ class AvoidanceParams:
     resolution_m: float = 10.0
     margin_m: float = 0.0
     speed_mps: float = 0.0
+    allow_arc: bool = True  # 交付编码：True=圆弧段；False=外切线直连原拐点（不支持圆弧的下游）
     waypoints: list[tuple[float, float, float]] = field(default_factory=list)  # (east, north, altitude)
 
 
@@ -303,6 +306,7 @@ def parse_avoidance_params(path: str) -> AvoidanceParams | None:
         resolution_m=_safe_float(grid.get("resolution_m", 10.0)) if isinstance(grid, dict) else 10.0,
         margin_m=_safe_float(grid.get("margin_m", 0.0)) if isinstance(grid, dict) else 0.0,
         speed_mps=_safe_float(route.get("speed_mps", 0.0)) if isinstance(route, dict) else 0.0,
+        allow_arc=bool(avoidance.get("allow_arc", True)),
         waypoints=waypoints,
     )
 
@@ -2263,26 +2267,61 @@ class MainWindow(QMainWindow):
         self.obstacle_list_layout.setContentsMargins(0, 0, 0, 0)
         self.obstacle_list_layout.setSpacing(4)
         avoidance_layout.addWidget(self.obstacle_list_container)
-        # 一键生成航线：跑 A*+去冗余+圆弧+可飞性，得到预览航线。
-        self.generate_route_button = QPushButton("⟳ 生成航线")
+        # 规划参数（界面可调，生成时覆盖配置；改动使预览失效）。左描述右输入，列对齐。
+        tip_r = "转弯半径 R（米）：拐弯圆弧的半径。取大可降低偏航角速率，但圆弧鼓出更远、每个拐点占用航段更长。"
+        tip_clear = "安全间距（米）：障碍向外膨胀的安全距离，航线与障碍至少保持这个间隔。"
+        tip_leg = "航段余度 L（米）：相邻两个拐点之间保留的最短直线长度，保证两段转弯圆弧之间留有直线过渡。"
+        self.turn_radius_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tip_r)
+        self.clearance_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tip_clear)
+        self.leg_margin_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tip_leg)
+        param_grid = QGridLayout()
+        param_grid.setContentsMargins(0, 2, 0, 2)
+        param_grid.setHorizontalSpacing(8)
+        param_grid.setVerticalSpacing(8)
+        param_grid.setColumnStretch(1, 1)  # 输入列吃掉剩余宽度，描述列定宽对齐。
+        for row, (text, tip, spin) in enumerate(
+            (
+                ("转弯半径 R", tip_r, self.turn_radius_spin),
+                ("安全间距", tip_clear, self.clearance_spin),
+                ("航段余度 L", tip_leg, self.leg_margin_spin),
+            )
+        ):
+            label = QLabel(text)
+            label.setObjectName("paramLabel")
+            label.setToolTip(tip)
+            label.setMinimumWidth(72)  # 定宽，保证三行输入框左边对齐、描述不被裁。
+            param_grid.addWidget(label, row, 0)
+            param_grid.addWidget(spin, row, 1)
+        avoidance_layout.addLayout(param_grid)
+        # 航段带圆弧：勾选=拐点输出圆弧；取消=外切线直连原拐点（不支持圆弧的下游）。
+        self.allow_arc_check = QCheckBox("航段带圆弧")
+        self.allow_arc_check.setToolTip("勾选：拐点输出圆弧段；取消：外切线直连原拐点（供不支持圆弧航段的下游）")
+        self.allow_arc_check.toggled.connect(self._on_avoidance_param_changed)
+        avoidance_layout.addWidget(self.allow_arc_check)
+        # 生成航线 / 采用航线并排一行，平分宽度，把横向空间用满。
+        button_row = QHBoxLayout()
+        button_row.setSpacing(8)
+        self.generate_route_button = QPushButton("生成航线")
         self.generate_route_button.clicked.connect(self._generate_route)
-        avoidance_layout.addWidget(self.generate_route_button)
-        # 采用航线：把预览航线下发控制器替换长机航线（采用后点播放仿真）。
-        self.adopt_route_button = QPushButton("✓ 采用航线")
+        self.adopt_route_button = QPushButton("采用航线")
         self.adopt_route_button.clicked.connect(self._adopt_route)
         self.adopt_route_button.setEnabled(False)
-        avoidance_layout.addWidget(self.adopt_route_button)
-        # 状态行：显示启用障碍数 / 生成结果 / 失败原因。
-        self.avoidance_status = QLabel("（未加载障碍）")
-        self.avoidance_status.setObjectName("reportPill")
+        button_row.addWidget(self.generate_route_button, 1)
+        button_row.addWidget(self.adopt_route_button, 1)
+        avoidance_layout.addLayout(button_row)
+        # 反馈区：填满按钮下方剩余空间，显示操作提示 / 生成结果 / 失败原因（顶端对齐、自动换行）。
+        self.avoidance_status = QLabel("")
+        self.avoidance_status.setObjectName("avoidHint")
         self.avoidance_status.setWordWrap(True)
-        avoidance_layout.addWidget(self.avoidance_status)
-        layout.addWidget(avoidance_group)
-        # 初始无障碍：同步一次列表与状态显示。
+        self.avoidance_status.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        avoidance_layout.addWidget(self.avoidance_status, 1)
+        layout.addWidget(avoidance_group, 1)
+        # 初始无障碍：同步一次列表、参数控件与状态显示。
         self._rebuild_obstacle_list()
+        self._sync_avoidance_param_widgets()
+        self._update_avoidance_status()
 
-        # 底部弹性占位把上面各分组顶到面板顶部。
-        layout.addStretch(1)
+        # 避障组 stretch=1 已吃掉底部余量（把空间用满），无需再加面板级弹性占位。
         return panel
 
     def _rebuild_obstacle_list(self) -> None:
@@ -2309,6 +2348,47 @@ class MainWindow(QMainWindow):
             self.obstacle_checkboxes.append(checkbox)
             self.obstacle_list_layout.addWidget(checkbox)
 
+    def _make_param_spin(self, *, maximum: float, step: float, tooltip: str = "") -> QDoubleSpinBox:
+        """构造规划参数数值框（米，非负，无上下按钮，直接键入）。注意：值变更即让已有预览失效。"""
+        spin = QDoubleSpinBox()
+        spin.setRange(0.0, maximum)
+        spin.setSingleStep(step)
+        spin.setDecimals(1)
+        spin.setSuffix(" m")
+        # 去掉上下微调按钮：直接键入数值。
+        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        if tooltip:
+            spin.setToolTip(tooltip)
+        spin.valueChanged.connect(self._on_avoidance_param_changed)
+        return spin
+
+    def _on_avoidance_param_changed(self, _value: object = None) -> None:
+        """规划参数被用户调整：使已有预览失效（需按新参数重新生成）。注意：安全间距变化同步刷新膨胀圈显示。"""
+        self._invalidate_preview()
+        if self.obstacles:
+            self.top_view.set_obstacles(self.obstacles, self.clearance_spin.value())
+
+    def _sync_avoidance_param_widgets(self) -> None:
+        """把解析到的规划参数灌进界面控件。注意：无 avoidance 配置时禁用；编程赋值屏蔽信号避免误失效。"""
+        params = self._avoidance_params
+        has_params = params is not None
+        widgets = (self.turn_radius_spin, self.clearance_spin, self.leg_margin_spin, self.allow_arc_check)
+        for widget in widgets:
+            widget.setEnabled(has_params)
+        if not has_params:
+            return
+        for spin, value in (
+            (self.turn_radius_spin, params.turn_radius_m),
+            (self.clearance_spin, params.clearance_m),
+            (self.leg_margin_spin, params.leg_margin_m),
+        ):
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
+        self.allow_arc_check.blockSignals(True)
+        self.allow_arc_check.setChecked(params.allow_arc)
+        self.allow_arc_check.blockSignals(False)
+
     def _on_obstacle_toggled(self, obstacle: ObstacleView, checked: bool) -> None:
         """勾选/取消某障碍。注意：勾选集变化使已生成的预览失效，需重新生成。"""
         obstacle.enabled = checked
@@ -2324,12 +2404,14 @@ class MainWindow(QMainWindow):
             self.adopt_route_button.setEnabled(False)
 
     def _update_avoidance_status(self) -> None:
-        """刷新避障状态文本。注意：只读当前障碍集，不触发规划。"""
+        """空闲时在反馈区显示操作提示（生成成功/失败时由 _generate_route 覆盖）。"""
         if not self.obstacles:
-            self.avoidance_status.setText("（未加载障碍）")
+            self.avoidance_status.setText("未加载障碍：当前配置无 avoidance.obstacles。")
             return
         enabled = sum(1 for obstacle in self.obstacles if obstacle.enabled)
-        self.avoidance_status.setText(f"启用 {enabled}/{len(self.obstacles)} 个障碍 · 待生成航线")
+        self.avoidance_status.setText(
+            f"已勾选 {enabled}/{len(self.obstacles)} 个障碍。\n设置参数后点「生成航线」预览，满意再「采用航线」。"
+        )
 
     def _set_obstacles_from_config(self, path: str) -> None:
         """从配置文件解析障碍与规划参数并刷新显示。注意：解析失败时清空，保持界面一致。"""
@@ -2339,6 +2421,7 @@ class MainWindow(QMainWindow):
         self.top_view.set_obstacles(obstacles, clearance)
         self._invalidate_preview()
         self._rebuild_obstacle_list()
+        self._sync_avoidance_param_widgets()
         self._update_avoidance_status()
 
     def _generate_route(self) -> None:
@@ -2355,16 +2438,18 @@ class MainWindow(QMainWindow):
             self.avoidance_status.setText("未选择障碍 · 维持原航线")
             self._log("Avoid", "未选择障碍，跳过生成（维持原航线）")
             return
+        # 规划参数以界面控件为准（用户可现场调），覆盖配置解析值。
         try:
             result = plan_avoidance_route(
                 params.waypoints,
                 enabled,
-                turn_radius_m=params.turn_radius_m,
-                leg_margin_m=params.leg_margin_m,
-                clearance_m=params.clearance_m,
+                turn_radius_m=self.turn_radius_spin.value(),
+                leg_margin_m=self.leg_margin_spin.value(),
+                clearance_m=self.clearance_spin.value(),
                 speed_mps=params.speed_mps,
                 resolution_m=params.resolution_m,
                 margin_m=params.margin_m,
+                allow_arc=self.allow_arc_check.isChecked(),
             )
         except ValueError as exc:
             self._invalidate_preview()
@@ -2702,6 +2787,32 @@ class MainWindow(QMainWindow):
                 color: {theme.muted.name()};
                 background: {theme.line.name()};
                 border-color: {theme.line.name()};
+            }}
+            QDoubleSpinBox {{
+                background: {theme.field.name()};
+                color: {theme.ink.name()};
+                border: 1px solid {theme.line.name()};
+                border-radius: 6px;
+                min-height: 26px;
+                padding: 0 6px;
+            }}
+            QDoubleSpinBox:focus {{
+                border-color: {theme.accent.name()};
+            }}
+            QDoubleSpinBox:disabled {{
+                color: {theme.muted.name()};
+                background: {theme.line.name()};
+                border-color: {theme.line.name()};
+            }}
+            QLabel#paramLabel {{
+                color: {theme.ink.name()};
+            }}
+            QLabel#avoidHint {{
+                color: {theme.muted.name()};
+                background: {theme.field.name()};
+                border: 1px solid {theme.line.name()};
+                border-radius: 6px;
+                padding: 8px 10px;
             }}
             QMenu {{
                 background: {theme.field.name()};
