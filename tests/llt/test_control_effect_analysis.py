@@ -76,6 +76,19 @@ class ControlEffectAnalysisTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "A01 缺少 track_vel_err_z_mps"):
                 load_snapshot_samples(path, label="A")
 
+    def test_sliding_window_uses_rolling_statistics_without_changing_results(self) -> None:
+        """滑窗统计应正确处理重复时刻、无序输入和最大绝对值发生时刻。"""
+        points = [(2.0, 2.0), (0.0, 1.0), (1.0, -4.0), (0.0, 3.0), (3.0, 5.0)]
+
+        windows = sliding_window(points, 0.0, 3.0, 2.0)
+
+        self.assertEqual([time_s for time_s, _summary in windows], [0.0, 1.0, 2.0, 3.0])
+        self.assertEqual([summary.count for _time_s, summary in windows], [3, 2, 2, 1])
+        self.assertEqual([summary.max_abs_time_s for _time_s, summary in windows], [1.0, 1.0, 3.0, 3.0])
+        self.assertEqual([summary.max_abs for _time_s, summary in windows], [4.0, 4.0, 5.0, 5.0])
+        self.assertAlmostEqual(windows[0][1].mean, 0.0)
+        self.assertAlmostEqual(windows[0][1].rms, (26.0 / 3.0) ** 0.5)
+
     def test_load_rejects_empty_or_bad_line(self) -> None:
         """空文件和坏 JSON 行应报告可定位错误。"""
         with tempfile.TemporaryDirectory() as tmp:

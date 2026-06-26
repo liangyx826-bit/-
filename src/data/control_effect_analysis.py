@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
@@ -262,15 +263,68 @@ def sliding_window(
         # 非正窗口不抛异常，GUI 已限制输入；脚本调用时返回空序列。
         return []
     start, end = normalized_time_range(start_s, end_s)
+    relevant = [(t, value) for t, value in points if start <= t <= end]
+    if not relevant:
+        return []
+    if any(relevant[index][0] < relevant[index - 1][0] for index in range(1, len(relevant))):
+        # 公共函数允许脚本传入无序点；GUI 路径来自 points_for，通常已排序。
+        relevant.sort(key=lambda item: item[0])
     # 只以真实样本时刻做锚点，避免图上出现插值点。
-    anchors = sorted({t for t, _value in points if start <= t <= end})
+    anchors = sorted({t for t, _value in relevant})
     result: list[tuple[float, MetricSummary]] = []
+    # left/right 定义当前窗口在 relevant 中的半开区间 [left, right)。
+    left = 0
+    right = 0
+    # total 和 square_total 支撑均值、方差、RMS 的 O(1) 更新。
+    total = 0.0
+    square_total = 0.0
+    # 队列里保存 max_abs 候选点下标，队首始终是当前窗口最大绝对值。
+    max_abs_indexes: deque[int] = deque()
     for anchor in anchors:
         window_end = anchor + window_s
-        # 左闭右开窗口减少相邻窗口边界样本重复计入。
-        summary = calc_summary([(t, value) for t, value in points if anchor <= t < window_end and t <= end])
-        if summary is not None:
-            result.append((anchor, summary))
+        # 窗口左边界右移时同步扣除离开的样本。
+        while left < len(relevant) and relevant[left][0] < anchor:
+            _old_t, old_value = relevant[left]
+            total -= old_value
+            square_total -= old_value * old_value
+            if max_abs_indexes and max_abs_indexes[0] == left:
+                max_abs_indexes.popleft()
+            left += 1
+        # 窗口右边界右移时只追加新进入窗口的样本。
+        while right < len(relevant) and relevant[right][0] < window_end:
+            _new_t, new_value = relevant[right]
+            total += new_value
+            square_total += new_value * new_value
+            # 单调队列按绝对值降序保留候选；相等时保留更早的样本时刻。
+            while max_abs_indexes and abs(relevant[max_abs_indexes[-1]][1]) < abs(new_value):
+                max_abs_indexes.pop()
+            max_abs_indexes.append(right)
+            right += 1
+        # 清理已经在左边界之外、但不是刚好队首离开的旧候选。
+        while max_abs_indexes and max_abs_indexes[0] < left:
+            max_abs_indexes.popleft()
+        count = right - left
+        if count <= 0:
+            continue
+        mean = total / count
+        # 浮点消差可能产生极小负数，用 max 保护 sqrt。
+        variance = max(0.0, square_total / count - mean * mean)
+        max_index = max_abs_indexes[0]
+        max_time, max_value = relevant[max_index]
+        result.append(
+            (
+                anchor,
+                MetricSummary(
+                    count=count,
+                    mean=mean,
+                    variance=variance,
+                    std=math.sqrt(variance),
+                    rms=math.sqrt(square_total / count),
+                    max_abs=abs(max_value),
+                    max_abs_time_s=max_time,
+                ),
+            )
+        )
     return result
 
 
