@@ -58,6 +58,18 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
         self.assertIsNotNone(params)
         self.assertAlmostEqual(params.simplify_clearance_m, 12.5)
 
+    def test_heading_penalties_parsed(self) -> None:
+        path = self._write({"avoidance": {
+            "enabled": True,
+            "turn_switch_penalty_m": 40.0,
+            "turn_angle_weight_m": 20.0,
+        }, "route": {"waypoints": [
+            {"x_m": 0, "y_m": 0}, {"x_m": 1000, "y_m": 0}]}})
+        params = parse_avoidance_params(path)
+        self.assertIsNotNone(params)
+        self.assertAlmostEqual(params.turn_switch_penalty_m, 40.0)
+        self.assertAlmostEqual(params.turn_angle_weight_m, 20.0)
+
     def test_missing_avoidance_returns_none(self) -> None:
         self.assertIsNone(parse_avoidance_params(self._write({"route": {"waypoints": []}})))
 

@@ -66,6 +66,8 @@ def plan_avoidance_route(
     speed_mps: float,
     resolution_m: float,
     simplify_clearance_m: float = 0.0,
+    turn_switch_penalty_m: float = 0.0,
+    turn_angle_weight_m: float = 0.0,
     margin_m: float = 0.0,
     arc_clearance: float = 0.0,
     sample_step: float | None = None,
@@ -81,6 +83,7 @@ def plan_avoidance_route(
         clearance_m：A* 栅格膨胀安全距离；simplify_clearance_m：A* 后视线去冗余使用的膨胀距离。
         arc_clearance：圆弧触障复核膨胀（默认 0 真实障碍）。
         speed_mps：输出航段地速；resolution_m / margin_m：A* 栅格分辨率与范围外扩。
+        turn_switch_penalty_m / turn_angle_weight_m：A* 搜索中用于减少航迹角切换的等效米代价。
         allow_arc：交付编码开关。True=拐点输出相切圆弧段；False=外切线，直连原拐点（不支持圆弧的下游）。
             注意：无论取值，check_feasibility 都按真实 R 校验转弯可飞性，不可飞两种编码都拒。
     返回：PlanResult（ok+route 或 ERR_AVOID_* 原因码 + 定位 + 诊断点）。
@@ -96,6 +99,7 @@ def plan_avoidance_route(
         raw = plan_path(
             (a[0], a[1]), (b[0], b[1]), obstacles,
             resolution_m=resolution_m, clearance_m=clearance_m, margin_m=margin_m,
+            turn_switch_penalty_m=turn_switch_penalty_m, turn_angle_weight_m=turn_angle_weight_m,
         )
         if raw is None:
             # 区分“端点落在膨胀障碍内”与“通道被封死”两类，便于诊断（见 §9.1）。

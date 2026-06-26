@@ -24,6 +24,32 @@ def _segment_lengths(path: list[tuple[float, float]]) -> float:
     return sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(path, path[1:]))
 
 
+def _direction_metrics(path: list[tuple[float, float]]) -> tuple[int, float]:
+    directions = [
+        (round((b[0] - a[0]) / 10.0), round((b[1] - a[1]) / 10.0))
+        for a, b in zip(path, path[1:])
+    ]
+    switches = 0
+    total_angle = 0.0
+    for previous, current in zip(directions, directions[1:]):
+        if previous == current:
+            continue
+        switches += 1
+        dot = previous[0] * current[0] + previous[1] * current[1]
+        prev_len = math.hypot(*previous)
+        cur_len = math.hypot(*current)
+        total_angle += math.degrees(math.acos(max(-1.0, min(1.0, dot / (prev_len * cur_len)))))
+    return switches, total_angle
+
+
+def _gapped_wall_obstacles(gap_north: float) -> list[ObstacleS]:
+    return [
+        make_rect(f"W{north}", 45.0, north - 5.0, 55.0, north + 5.0)
+        for north in range(-50, 60, 10)
+        if north != gap_north
+    ]
+
+
 class ObstaclePrimitiveTests(unittest.TestCase):
     """The single shape primitive inside() must back both A* and feasibility checks."""
 
@@ -170,6 +196,64 @@ class AStarPlanPathTests(unittest.TestCase):
         path = plan_path((0.0, 0.0), (1000.0, 0.0), obstacles, resolution_m=20.0, clearance_m=clearance, margin_m=300.0)
         self.assertIsNotNone(path)
         self._assert_collision_free(path, obstacles, clearance)
+
+    def test_zero_heading_penalties_match_legacy_path(self) -> None:
+        obstacles = _gapped_wall_obstacles(-30.0)
+        common = dict(
+            resolution_m=10.0,
+            clearance_m=0.0,
+            bounds=(-10.0, -60.0, 110.0, 60.0),
+        )
+        legacy = plan_path((0.0, -30.0), (100.0, 0.0), obstacles, **common)
+        zero_penalty = plan_path(
+            (0.0, -30.0), (100.0, 0.0), obstacles,
+            turn_switch_penalty_m=0.0,
+            turn_angle_weight_m=0.0,
+            **common,
+        )
+
+        self.assertIsNotNone(legacy)
+        self.assertEqual(zero_penalty, legacy)
+
+    def test_turn_switch_penalty_reduces_direction_switches(self) -> None:
+        obstacles = _gapped_wall_obstacles(-30.0)
+        common = dict(
+            resolution_m=10.0,
+            clearance_m=0.0,
+            bounds=(-10.0, -60.0, 110.0, 60.0),
+        )
+        baseline = plan_path((0.0, -30.0), (100.0, 0.0), obstacles, **common)
+        penalized = plan_path(
+            (0.0, -30.0), (100.0, 0.0), obstacles,
+            turn_switch_penalty_m=50.0,
+            turn_angle_weight_m=0.0,
+            **common,
+        )
+
+        self.assertIsNotNone(baseline)
+        self.assertIsNotNone(penalized)
+        self.assertLess(_direction_metrics(penalized)[0], _direction_metrics(baseline)[0])
+        self._assert_collision_free(penalized, obstacles, 0.0)
+
+    def test_turn_angle_weight_reduces_total_heading_change(self) -> None:
+        obstacles = _gapped_wall_obstacles(-30.0)
+        common = dict(
+            resolution_m=10.0,
+            clearance_m=0.0,
+            bounds=(-10.0, -60.0, 110.0, 60.0),
+        )
+        baseline = plan_path((0.0, -30.0), (100.0, 0.0), obstacles, **common)
+        penalized = plan_path(
+            (0.0, -30.0), (100.0, 0.0), obstacles,
+            turn_switch_penalty_m=0.0,
+            turn_angle_weight_m=50.0,
+            **common,
+        )
+
+        self.assertIsNotNone(baseline)
+        self.assertIsNotNone(penalized)
+        self.assertLess(_direction_metrics(penalized)[1], _direction_metrics(baseline)[1])
+        self._assert_collision_free(penalized, obstacles, 0.0)
 
     def test_invalid_resolution_raises(self) -> None:
         with self.assertRaises(ValueError):

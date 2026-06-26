@@ -8,11 +8,12 @@
 from __future__ import annotations
 
 import heapq
-from math import ceil, hypot, sqrt
+from math import acos, ceil, degrees, hypot, sqrt
 
 from .obstacle import ObstacleS, blocked, obstacle_bounds
 
 Point = tuple[float, float]
+State = tuple[int, int, int | None]
 
 # 栅格单元总数上限：防止分辨率过小 / 范围过大导致内存与耗时失控。超限视为配置错误。
 MAX_GRID_CELLS = 4_000_000
@@ -88,6 +89,8 @@ def plan_path(
     clearance_m: float = 0.0,
     bounds: tuple[float, float, float, float] | None = None,
     margin_m: float = 0.0,
+    turn_switch_penalty_m: float = 0.0,
+    turn_angle_weight_m: float = 0.0,
 ) -> list[Point] | None:
     """在栅格上用 A* 求避障路径。
 
@@ -98,6 +101,8 @@ def plan_path(
         clearance_m：障碍膨胀安全距离。
         bounds：(min_e, min_n, max_e, max_n) 栅格范围；None 时由 compute_bounds 推出。
         margin_m：自动推范围时的额外外扩。
+        turn_switch_penalty_m：方向发生切换时额外加入的等效米代价；0 时不改变旧行为。
+        turn_angle_weight_m：每 45° 航迹角变化额外加入的等效米代价；0 时不改变旧行为。
     返回：
         起点→终点的格点折线（首尾为精确 start/goal）；无解返回 None。
     异常：
@@ -105,6 +110,10 @@ def plan_path(
     """
     if resolution_m <= 0.0:
         raise ValueError("resolution_m must be > 0")
+    if turn_switch_penalty_m < 0.0:
+        raise ValueError("turn_switch_penalty_m must be >= 0")
+    if turn_angle_weight_m < 0.0:
+        raise ValueError("turn_angle_weight_m must be >= 0")
     if bounds is None:
         bounds = compute_bounds(start, goal, obstacles, clearance_m, margin_m + resolution_m)
     min_e, min_n, max_e, max_n = bounds
@@ -158,38 +167,93 @@ def plan_path(
         east, north = cell_center(i, j)
         return hypot(east - goal_e, north - goal_n)
 
-    # A*：open 堆元素 (f, tie, cell)；tie 计数器保证可复现的稳定出栈顺序。
-    counter = 0
-    open_heap: list[tuple[float, int, tuple[int, int]]] = [(heuristic(*start_cell), counter, start_cell)]
-    came_from: dict[tuple[int, int], tuple[int, int]] = {}
-    g_score: dict[tuple[int, int], float] = {start_cell: 0.0}
-    closed: set[tuple[int, int]] = set()
+    if turn_switch_penalty_m == 0.0 and turn_angle_weight_m == 0.0:
+        # A*：open 堆元素 (f, tie, cell)；tie 计数器保证可复现的稳定出栈顺序。
+        counter = 0
+        open_heap: list[tuple[float, int, tuple[int, int]]] = [(heuristic(*start_cell), counter, start_cell)]
+        came_from: dict[tuple[int, int], tuple[int, int]] = {}
+        g_score: dict[tuple[int, int], float] = {start_cell: 0.0}
+        closed: set[tuple[int, int]] = set()
 
-    while open_heap:
-        _, _, current = heapq.heappop(open_heap)
-        if current == goal_cell:
-            return _reconstruct(came_from, current, start, goal, cell_center)
-        if current in closed:
+        while open_heap:
+            _, _, current = heapq.heappop(open_heap)
+            if current == goal_cell:
+                return _reconstruct(came_from, current, start, goal, cell_center)
+            if current in closed:
+                continue
+            closed.add(current)
+            ci, cj = current
+            for di, dj, step in _NEIGHBORS:
+                ni, nj = ci + di, cj + dj
+                if ni < 0 or ni >= nx or nj < 0 or nj >= ny:
+                    continue
+                if is_blocked(ni, nj) or (ni, nj) in closed:
+                    continue
+                # 防止贴障碍“抄对角”：对角移动时，两个正交相邻格任一被占就禁止穿过。
+                if di != 0 and dj != 0 and (is_blocked(ci + di, cj) or is_blocked(ci, cj + dj)):
+                    continue
+                tentative = g_score[current] + step * resolution_m
+                if tentative < g_score.get((ni, nj), float("inf")):
+                    came_from[(ni, nj)] = current
+                    g_score[(ni, nj)] = tentative
+                    counter += 1
+                    heapq.heappush(open_heap, (tentative + heuristic(ni, nj), counter, (ni, nj)))
+
+        return None
+
+    def turn_penalty(previous_dir: int | None, current_dir: int) -> float:
+        """计算方向切换附加代价，单位是等效米。"""
+        if previous_dir is None or previous_dir == current_dir:
+            return 0.0
+        return turn_switch_penalty_m + turn_angle_weight_m * (_direction_delta_deg(previous_dir, current_dir) / 45.0)
+
+    start_state: State = (start_cell[0], start_cell[1], None)
+    counter = 0
+    open_heap_state: list[tuple[float, int, State]] = [(heuristic(*start_cell), counter, start_state)]
+    came_from_state: dict[State, State] = {}
+    g_score_state: dict[State, float] = {start_state: 0.0}
+    closed_state: set[State] = set()
+
+    while open_heap_state:
+        _, _, current = heapq.heappop(open_heap_state)
+        if current in closed_state:
             continue
-        closed.add(current)
-        ci, cj = current
-        for di, dj, step in _NEIGHBORS:
+        ci, cj, previous_dir = current
+        if (ci, cj) == goal_cell:
+            return _reconstruct_state(came_from_state, current, start, goal, cell_center)
+        closed_state.add(current)
+        for direction_index, (di, dj, step) in enumerate(_NEIGHBORS):
             ni, nj = ci + di, cj + dj
             if ni < 0 or ni >= nx or nj < 0 or nj >= ny:
                 continue
-            if is_blocked(ni, nj) or (ni, nj) in closed:
+            next_state: State = (ni, nj, direction_index)
+            if is_blocked(ni, nj) or next_state in closed_state:
                 continue
             # 防止贴障碍“抄对角”：对角移动时，两个正交相邻格任一被占就禁止穿过。
             if di != 0 and dj != 0 and (is_blocked(ci + di, cj) or is_blocked(ci, cj + dj)):
                 continue
-            tentative = g_score[current] + step * resolution_m
-            if tentative < g_score.get((ni, nj), float("inf")):
-                came_from[(ni, nj)] = current
-                g_score[(ni, nj)] = tentative
+            tentative = (
+                g_score_state[current]
+                + step * resolution_m
+                + turn_penalty(previous_dir, direction_index)
+            )
+            if tentative < g_score_state.get(next_state, float("inf")):
+                came_from_state[next_state] = current
+                g_score_state[next_state] = tentative
                 counter += 1
-                heapq.heappush(open_heap, (tentative + heuristic(ni, nj), counter, (ni, nj)))
+                heapq.heappush(open_heap_state, (tentative + heuristic(ni, nj), counter, next_state))
 
     return None
+
+
+def _direction_delta_deg(previous_dir: int, current_dir: int) -> float:
+    """返回两个 8 邻域方向之间的夹角，单位 degree。"""
+    p_di, p_dj, _ = _NEIGHBORS[previous_dir]
+    c_di, c_dj, _ = _NEIGHBORS[current_dir]
+    dot = p_di * c_di + p_dj * c_dj
+    p_len = hypot(p_di, p_dj)
+    c_len = hypot(c_di, c_dj)
+    return degrees(acos(max(-1.0, min(1.0, dot / (p_len * c_len)))))
 
 
 def _reconstruct(
@@ -207,6 +271,26 @@ def _reconstruct(
         cells.append(node)
     cells.reverse()
     points = [cell_center(i, j) for i, j in cells]
+    points[0] = start
+    points[-1] = goal
+    return points
+
+
+def _reconstruct_state(
+    came_from: dict[State, State],
+    goal_state: State,
+    start: Point,
+    goal: Point,
+    cell_center,
+) -> list[Point]:
+    """回溯带入射方向的状态路径，并把首尾替换为精确 start/goal。"""
+    states = [goal_state]
+    node = goal_state
+    while node in came_from:
+        node = came_from[node]
+        states.append(node)
+    states.reverse()
+    points = [cell_center(i, j) for i, j, _ in states]
     points[0] = start
     points[-1] = goal
     return points

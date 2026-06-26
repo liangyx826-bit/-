@@ -33,6 +33,8 @@
     "leg_length_margin_m": 80.0,
     "clearance_m": 120.0,
     "simplify_clearance_m": 120.0,
+    "turn_switch_penalty_m": 0.0,
+    "turn_angle_weight_m": 0.0,
     "grid": {
       "resolution_m": 20.0,
       "margin_m": 300.0
