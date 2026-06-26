@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from math import hypot
+from math import ceil, hypot
 
 from src.algorithm.context.leaf_types import PosInEarthS, RouteS, WayLineS, WayPointS
 from src.algorithm.units.algo.arc_path import corner_arc
@@ -44,12 +44,15 @@ def line_of_sight_clear(
     sample_step: float | None = None,
 ) -> bool:
     """线段 start→end 是否全程在（膨胀后的）障碍之外。注意：按 sample_step 密集采样逐点判定。"""
+    if sample_step is not None and sample_step <= 0.0:
+        raise ValueError("sample_step must be > 0")
     if not obstacles:
         return True
     if sample_step is None:
         sample_step = _default_sample_step(obstacles, clearance)
     length = hypot(end[0] - start[0], end[1] - start[1])
-    steps = max(1, int(length / sample_step))
+    # 用 ceil 保证实际采样间距 length/steps <= sample_step（int 向下取整会让间距超限、漏检细障碍）。
+    steps = max(1, ceil(length / sample_step))
     for k in range(steps + 1):
         t = k / steps
         east = start[0] + (end[0] - start[0]) * t

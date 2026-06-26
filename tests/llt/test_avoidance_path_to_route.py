@@ -36,6 +36,18 @@ class LineOfSightTests(unittest.TestCase):
         self.assertTrue(line_of_sight_clear((0.0, 0.0), (100.0, 0.0), obstacles))
         self.assertFalse(line_of_sight_clear((0.0, 0.0), (100.0, 0.0), obstacles, clearance=30.0))
 
+    def test_sample_step_is_spacing_upper_bound_not_floored(self) -> None:
+        # length=19、sample_step=10：int 向下取整只采两端点会漏掉中间细障碍；ceil 必须采到 (9.5,0)。
+        obstacles = [make_circle("C", 9.5, 0.0, 2.0)]
+        self.assertFalse(line_of_sight_clear((0.0, 0.0), (19.0, 0.0), obstacles, sample_step=10.0))
+
+    def test_invalid_sample_step_raises(self) -> None:
+        obstacles = [make_circle("C", 5.0, 0.0, 1.0)]
+        with self.assertRaises(ValueError):
+            line_of_sight_clear((0.0, 0.0), (10.0, 0.0), obstacles, sample_step=0.0)
+        with self.assertRaises(ValueError):
+            line_of_sight_clear((0.0, 0.0), (10.0, 0.0), obstacles, sample_step=-1.0)
+
 
 class SimplifyPathTests(unittest.TestCase):
     def test_collinear_points_reduced_to_endpoints(self) -> None:
