@@ -2,8 +2,19 @@
 
 from __future__ import annotations
 
+import math
+
 from src.algorithm.context.context import FormContextS, reset_context
-from src.algorithm.context.leaf_types import PosTrackDiagS, RemoteCmdS, copy_motion, copy_pos_track_diag
+from src.algorithm.context.leaf_types import (
+    PosInEarthS,
+    PosTrackDiagS,
+    RemoteCmdS,
+    WayLineS,
+    WayPointInputS,
+    WayPointS,
+    copy_motion,
+    copy_pos_track_diag,
+)
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.types import (
     DEFAULT_CONTROL_PERIOD_S,
@@ -12,6 +23,7 @@ from src.algorithm.entity.types import (
     EntityOutputS,
     VelCmdLimitS,
 )
+from src.algorithm.units.algo.arc_path import corner_arc
 from src.algorithm.units.algo.ctrl.base import CtrlInitS
 from src.algorithm.units.algo.ctrl.ppi import PPIInitS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
@@ -48,7 +60,8 @@ class LeaderEntity(EntityBase):
 
         # 各单元一次性初始化；航路规划注入预置航线，广播注入本机 id 与拓扑
         self._task.init(None)
-        self._tra_plan.init(LeaderRouteInitS(cfg.route))
+        route_lines = waypoint_inputs_to_waylines(cfg.route) if len(cfg.route) >= 2 else None
+        self._tra_plan.init(LeaderRouteInitS(route_lines))
         self._pos_calc.init(RouteInterpInitS(lookAheadDistance=_LEADER_L1_DISTANCE_M, leadTimeS=_LEADER_FF_LEAD_TIME_S))
         self._pos_track.init(_default_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
         self._outbound.init(OutboundInitS(cfg.selfInit.id, cfg.commInit.netWork))
@@ -117,6 +130,32 @@ class LeaderEntity(EntityBase):
     def close(self) -> None:
         """释放 LeaderEntity 持有的资源。注意：关闭后不应继续调用运行接口。"""
         return None
+
+
+def waypoint_inputs_to_waylines(inputs: list[WayPointInputS]) -> list[WayLineS]:
+    """Convert raw waypoint inputs to internal WayLineS sequence with arc geometry resolved.
+
+    Case 1 (turnSign != 0): pre-computed arc (e.g. from A*), mapped directly.
+    Case 2 (turnSign == 0, r > 0, not first/last): compute corner arc via corner_arc().
+    Default: straight segment, direct mapping.
+    """
+    if len(inputs) < 2:
+        raise ValueError("at least 2 waypoints required")
+    nodes: list[WayPointS] = []
+    for i, wpi in enumerate(inputs):
+        if wpi.turnSign != 0.0:
+            nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd, turnSign=wpi.turnSign, center=wpi.center))
+        elif 0 < i < len(inputs) - 1 and wpi.r > 0.0:
+            arc = corner_arc(inputs[i - 1].pos, wpi.pos, inputs[i + 1].pos, wpi.r)
+            if arc is not None:
+                t1, t2, center, turn_sign = arc
+                nodes.append(WayPointS(idx=wpi.idx, pos=t1, vdCmd=inputs[i - 1].vdCmd, turnSign=turn_sign, center=center))
+                nodes.append(WayPointS(idx=wpi.idx, pos=t2, vdCmd=wpi.vdCmd))
+            else:
+                nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd))
+        else:
+            nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd))
+    return [WayLineS(idx=j, start=nodes[j], end=nodes[j + 1]) for j in range(len(nodes) - 1)]
 
 
 def _tracker_init(control_period_s: float, gain_forward: PPIInitS, vel_limit: VelCmdLimitS) -> PidComposeInitS:
