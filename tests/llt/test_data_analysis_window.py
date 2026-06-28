@@ -14,7 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCharts import QChartView
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from src.ui.gui import data_analysis_window as data_analysis_window_module
 from src.ui.gui.data_analysis_window import DataAnalysisWindow
@@ -94,6 +94,20 @@ class DataAnalysisWindowTests(unittest.TestCase):
             self.assertEqual(rows[0]["scope"], "all")
             self.assertEqual(rows[0]["channel"], "track_pos_err_x_m")
             self.assertEqual(rows[0]["channel_label"], "前向位置误差 x")
+
+    def test_chart_popup_button_uses_icon_instead_of_text_glyph(self) -> None:
+        """滑动窗口弹出按钮应使用图标，避免字体缺字时显示成小方框。"""
+        window = DataAnalysisWindow()
+        window.show()
+        self.app.processEvents()
+
+        button = window.findChild(QPushButton, "offlineChartPopupButton")
+
+        self.assertIsNotNone(button)
+        assert button is not None
+        self.assertEqual(button.text(), "")
+        self.assertFalse(button.icon().isNull())
+        self.assertEqual(button.toolTip(), "弹出图表窗口")
 
     def test_vertical_channel_buttons_switch_plot_channel(self) -> None:
         """垂向位置和垂向速度按钮应能切换当前绘图通道。"""
