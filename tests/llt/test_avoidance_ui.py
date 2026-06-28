@@ -15,14 +15,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
-from src.algorithm.units.process.tra_plan.avoidance.path_to_route import points_to_route
+from src.algorithm.units.process.tra_plan.avoidance.path_to_route import assign_transition_radius, points_to_route
 from src.ui.gui.main_window import (
     MainWindow,
     parse_avoidance_params,
     route_to_polyline,
 )
 
-CONFIG = str(Path(__file__).resolve().parents[2] / "configs" / "base.json")
+CONFIG = str(Path(__file__).resolve().parent / "fixtures" / "test.json")
 
 
 class ParseAvoidanceParamsTests(unittest.TestCase):
@@ -108,13 +108,14 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
 
 class RouteToPolylineTests(unittest.TestCase):
     def test_straight_route(self) -> None:
-        route = points_to_route([(0.0, 0.0), (100.0, 0.0)], turn_radius_m=0.0, speed_mps=20.0)
+        route = points_to_route([(0.0, 0.0), (100.0, 0.0)], speed_mps=20.0)
         poly = route_to_polyline(route)
         self.assertEqual(poly[0], (0.0, 0.0))
         self.assertEqual(poly[-1], (100.0, 0.0))
 
     def test_arc_route_is_sampled(self) -> None:
-        route = points_to_route([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=200.0, speed_mps=20.0)
+        route = points_to_route([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], speed_mps=20.0)
+        assign_transition_radius(route, 200.0)
         poly = route_to_polyline(route)
         # 圆弧被采样为多点，折线点数应明显多于航段数。
         self.assertGreater(len(poly), len(waypoint_inputs_to_waylines(route)))
@@ -142,7 +143,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
 
     @staticmethod
     def _set_feasible_params(window: MainWindow) -> None:
-        # 用一组已知可飞的参数覆盖控件值，使“生成成功”相关用例不依赖 base.json 的具体 R/L。
+        # 用一组已知可飞的参数覆盖控件值，使“生成成功”相关用例不依赖夹具 test.json 的具体 R/L。
         window.turn_radius_spin.setValue(150.0)
         window.clearance_spin.setValue(120.0)
         window.leg_margin_spin.setValue(50.0)
@@ -201,14 +202,15 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         self.assertIsNone(window._preview_route)
         self.assertFalse(window.adopt_route_button.isEnabled())
 
-    def test_allow_arc_unchecked_generates_straight_only(self) -> None:
-        # 取消“航段带圆弧”后生成的预览应无圆弧段（外切线交付）。
+    def test_corner_gets_transition_radius_even_when_allow_arc_unchecked(self) -> None:
+        # “航段带圆弧”只管航段自身是否曲线；直线-直线拐点的交接半径恒补，与勾选无关。
         window = self._window()
         self._set_feasible_params(window)
         window.allow_arc_check.setChecked(False)
         window._generate_route()
         self.assertIsNotNone(window._preview_route)
-        self.assertTrue(all(wpi.r == 0.0 for wpi in window._preview_route))
+        # 绕障产生内部拐点 → 至少一个内部航点拿到交接半径 R>0。
+        self.assertTrue(any(wpi.r > 0.0 for wpi in window._preview_route))
 
     def test_widget_value_overrides_config_at_generate(self) -> None:
         # 界面调大 L 到不可飞 → 生成失败，证明用的是控件值而非配置值。

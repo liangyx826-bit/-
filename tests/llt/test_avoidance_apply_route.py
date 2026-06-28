@@ -9,13 +9,13 @@ from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import points_to_route
 from src.runner.sim_control import SimulationController
 
-CONFIG = str(Path(__file__).resolve().parents[2] / "configs" / "base.json")
+CONFIG = str(Path(__file__).resolve().parent / "fixtures" / "test.json")
 
 
 def _sample_route() -> list[WayPointInputS]:
     # 一条带一个拐点的简单航线。
     return points_to_route(
-        [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=150.0, speed_mps=20.0, altitude_m=1000.0
+        [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], speed_mps=20.0, altitude_m=1000.0
     )
 
 

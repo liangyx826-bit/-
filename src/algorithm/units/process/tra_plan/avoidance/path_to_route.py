@@ -1,9 +1,10 @@
 """出口翻译：A* 锯齿格点 → 视线去冗余 → WayPointInputS 列表。
 
-职责（见 docs/避障-A星-开发计划.md §6 步骤3）：
+职责（见 docs/避障-A星-设计文档.md §4.3、§6）：
 - simplify_path()：视线可达去冗余，把栅格锯齿拉直成尽量少的拐点（拉直段不得穿障碍）。
-- points_to_route()：拐点设 r=turn_radius_m，返回 list[WayPointInputS]；
-  圆弧几何由 leader.init() 中的 _waypoint_inputs_to_waylines() 统一计算。
+- points_to_route()：只摆点，返回 list[WayPointInputS]，r 一律 0（不决策交接半径）。
+- assign_transition_radius()：可飞性校验后，给两侧均为直线段的内部拐点补 r=turn_radius_m。
+  圆弧几何由 leader.init() 中的 waypoint_inputs_to_waylines() 统一计算。
 
 圆弧是否真正可飞（腿长 ≥ d_in+d_out+L、圆弧不触障）留待步骤4 可飞性校验。
 """
@@ -92,31 +93,44 @@ def simplify_path(
 def points_to_route(
     points: list[Point],
     *,
-    turn_radius_m: float,
     speed_mps: float,
     altitude_m: float = 0.0,
     altitudes: list[float] | None = None,
-    insert_arcs: bool = True,
 ) -> list[WayPointInputS]:
-    """把（去冗余后的）拐点折线转成 WayPointInputS 列表。
+    """把（去冗余后的）拐点折线转成 WayPointInputS 列表：只摆点，r 一律 0。
 
-    内部拐点设 r=turn_radius_m（insert_arcs=True），圆弧几何由 leader.init() 统一计算。
-    insert_arcs=False：r=0，全部直线直连。
+    交接半径 r 由 assign_transition_radius() 在可飞性校验后统一补充，本函数不决策 r。
     高度：默认整条用 altitude_m；传入 altitudes（与 points 等长）则逐点取值。
     """
     if len(points) < 2:
         raise ValueError("points_to_route needs at least two points")
-    if turn_radius_m < 0.0:
-        raise ValueError("turn_radius_m must be >= 0")
     if speed_mps < 0.0:
         raise ValueError("speed_mps must be >= 0")
     if altitudes is not None and len(altitudes) != len(points):
         raise ValueError("altitudes length must match points")
 
-    n = len(points)
     result: list[WayPointInputS] = []
     for i, (east, north) in enumerate(points):
         alt = altitudes[i] if altitudes is not None else altitude_m
-        r = turn_radius_m if (insert_arcs and 0 < i < n - 1) else 0.0
-        result.append(WayPointInputS(idx=i, pos=PosInEarthS(east, north, alt), vdCmd=speed_mps, r=r))
+        result.append(WayPointInputS(idx=i, pos=PosInEarthS(east, north, alt), vdCmd=speed_mps, r=0.0))
     return result
+
+
+def assign_transition_radius(inputs: list[WayPointInputS], turn_radius_m: float) -> list[WayPointInputS]:
+    """补充函数：可飞性校验后，给两侧均为直线段的内部拐点补交接半径 R。
+
+    判定按航段关系（与 allow_arc 无关，allow_arc 只决定航段自身是否曲线）：
+    - 入段(i-1→i)、出段(i→i+1)都为直线（其起点 turnSign==0）→ inputs[i].r=turn_radius_m；
+    - 任一邻段为曲线（turnSign!=0，如将来的贴障弧线段）→ inputs[i].r=0，交接交给曲线自身；
+    - 首末点不补。
+    原地改写 inputs[*].r 并返回同一列表。注意：每点都显式赋值，避免残留旧 r。
+    """
+    if turn_radius_m < 0.0:
+        raise ValueError("turn_radius_m must be >= 0")
+    n = len(inputs)
+    for i in range(n):
+        in_straight = i > 0 and inputs[i - 1].turnSign == 0.0  # 入段 (i-1→i) 是否直线
+        out_straight = i < n - 1 and inputs[i].turnSign == 0.0  # 出段 (i→i+1) 是否直线
+        is_interior = 0 < i < n - 1
+        inputs[i].r = turn_radius_m if (is_interior and in_straight and out_straight) else 0.0
+    return inputs

@@ -13,7 +13,9 @@ from src.algorithm.units.process.tra_plan.avoidance.obstacle import (
     make_circle,
     make_rect,
 )
+from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import (
+    assign_transition_radius,
     line_of_sight_clear,
     points_to_route,
     simplify_path,
@@ -80,9 +82,16 @@ class SimplifyPathTests(unittest.TestCase):
             self.assertTrue(line_of_sight_clear(a, b, obstacles, clearance=clearance), f"leg {a}-{b} crosses obstacle")
 
 
+def _route_with_radius(points, *, turn_radius_m, speed_mps, **kw):
+    """生产端真实顺序：摆点(r=0) → 补交接半径。"""
+    wpi = points_to_route(points, speed_mps=speed_mps, **kw)
+    assign_transition_radius(wpi, turn_radius_m)
+    return wpi
+
+
 class PointsToRouteTests(unittest.TestCase):
     def test_two_points_make_wpi_list(self) -> None:
-        wpi = points_to_route([(0.0, 0.0), (100.0, 0.0)], turn_radius_m=20.0, speed_mps=20.0)
+        wpi = points_to_route([(0.0, 0.0), (100.0, 0.0)], speed_mps=20.0)
         self.assertEqual(len(wpi), 2)
         self.assertEqual(wpi[0].r, 0.0)
         self.assertEqual(wpi[1].r, 0.0)
@@ -90,18 +99,15 @@ class PointsToRouteTests(unittest.TestCase):
         self.assertEqual((wpi[1].pos.east, wpi[1].pos.north), (100.0, 0.0))
         self.assertEqual(wpi[0].vdCmd, 20.0)
 
-    def test_interior_point_gets_radius(self) -> None:
-        wpi = points_to_route(
-            [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=200.0, speed_mps=20.0
-        )
-        self.assertEqual(len(wpi), 3)
-        self.assertEqual(wpi[0].r, 0.0)  # 首点 r=0
-        self.assertEqual(wpi[1].r, 200.0)  # 内部拐点 r=R
-        self.assertEqual(wpi[2].r, 0.0)  # 末点 r=0
+    def test_only_places_points_r_always_zero(self) -> None:
+        # points_to_route 不决策 r，内部拐点也保持 0（由 assign_transition_radius 后补）。
+        wpi = points_to_route([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], speed_mps=20.0)
+        self.assertTrue(all(w.r == 0.0 for w in wpi))
+        self.assertTrue(all(w.turnSign == 0.0 for w in wpi))
 
     def test_corner_arc_geometry_via_conversion(self) -> None:
-        # L 形拐点，R 足够小可装进两腿 → 转换后得到直线+圆弧+直线段。
-        wpi = points_to_route(
+        # L 形拐点，R 足够小可装进两腿 → 补 R 后转换得到直线+圆弧+直线段。
+        wpi = _route_with_radius(
             [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=200.0, speed_mps=20.0
         )
         lines = waypoint_inputs_to_waylines(wpi)
@@ -120,7 +126,7 @@ class PointsToRouteTests(unittest.TestCase):
     def test_oversized_corner_radius_falls_back_to_straight_lines(self) -> None:
         """圆弧切点超出相邻腿长时，应退回原始折线而不是插入腿外圆弧。"""
 
-        wpi = points_to_route(
+        wpi = _route_with_radius(
             [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)], turn_radius_m=100.0, speed_mps=20.0
         )
         lines = waypoint_inputs_to_waylines(wpi)
@@ -132,51 +138,83 @@ class PointsToRouteTests(unittest.TestCase):
         self.assertAlmostEqual(lines[1].start.pos.east, 10.0)
         self.assertAlmostEqual(lines[1].start.pos.north, 0.0)
 
-    def test_insert_arcs_false_all_r_zero(self) -> None:
-        wpi = points_to_route(
-            [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=200.0, speed_mps=20.0, insert_arcs=False
-        )
-        self.assertTrue(all(w.r == 0.0 for w in wpi))
-        lines = waypoint_inputs_to_waylines(wpi)
-        # n 点 → n-1 段直线
-        self.assertEqual(len(lines), 2)
-        self.assertTrue(all(ln.start.turnSign == 0.0 for ln in lines))
-
-    def test_insert_arcs_true_default_inserts_arc_via_conversion(self) -> None:
-        wpi = points_to_route([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=200.0, speed_mps=20.0)
+    def test_with_radius_inserts_arc_via_conversion(self) -> None:
+        wpi = _route_with_radius([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=200.0, speed_mps=20.0)
         lines = waypoint_inputs_to_waylines(wpi)
         self.assertTrue(any(ln.start.turnSign != 0.0 for ln in lines))
 
     def test_endpoints_have_correct_pos(self) -> None:
         wpi = points_to_route(
-            [(0.0, 0.0), (500.0, 0.0), (500.0, 500.0), (1000.0, 500.0)], turn_radius_m=120.0, speed_mps=18.0
+            [(0.0, 0.0), (500.0, 0.0), (500.0, 500.0), (1000.0, 500.0)], speed_mps=18.0
         )
         self.assertEqual((wpi[0].pos.east, wpi[0].pos.north), (0.0, 0.0))
         self.assertEqual((wpi[-1].pos.east, wpi[-1].pos.north), (1000.0, 500.0))
 
     def test_altitude_applied(self) -> None:
-        wpi = points_to_route([(0.0, 0.0), (100.0, 0.0)], turn_radius_m=0.0, speed_mps=20.0, altitude_m=1000.0)
+        wpi = points_to_route([(0.0, 0.0), (100.0, 0.0)], speed_mps=20.0, altitude_m=1000.0)
         self.assertEqual(wpi[0].pos.h, 1000.0)
         self.assertEqual(wpi[1].pos.h, 1000.0)
 
     def test_per_point_altitudes_applied(self) -> None:
         wpi = points_to_route(
-            [(0.0, 0.0), (100.0, 0.0)], turn_radius_m=0.0, speed_mps=20.0, altitudes=[1000.0, 1200.0]
+            [(0.0, 0.0), (100.0, 0.0)], speed_mps=20.0, altitudes=[1000.0, 1200.0]
         )
         self.assertEqual(wpi[0].pos.h, 1000.0)
         self.assertEqual(wpi[1].pos.h, 1200.0)
 
     def test_altitudes_length_mismatch_raises(self) -> None:
         with self.assertRaises(ValueError):
-            points_to_route([(0.0, 0.0), (100.0, 0.0)], turn_radius_m=0.0, speed_mps=20.0, altitudes=[1000.0])
+            points_to_route([(0.0, 0.0), (100.0, 0.0)], speed_mps=20.0, altitudes=[1000.0])
 
     def test_invalid_inputs_raise(self) -> None:
         with self.assertRaises(ValueError):
-            points_to_route([(0.0, 0.0)], turn_radius_m=20.0, speed_mps=20.0)
+            points_to_route([(0.0, 0.0)], speed_mps=20.0)
         with self.assertRaises(ValueError):
-            points_to_route([(0.0, 0.0), (1.0, 0.0)], turn_radius_m=-1.0, speed_mps=20.0)
+            points_to_route([(0.0, 0.0), (1.0, 0.0)], speed_mps=-1.0)
+
+
+class AssignTransitionRadiusTests(unittest.TestCase):
+    """补充函数：可飞性校验后，给两侧均为直线段的内部拐点补交接半径 R。"""
+
+    @staticmethod
+    def _wpi(east: float, north: float, *, turn_sign: float = 0.0) -> WayPointInputS:
+        return WayPointInputS(pos=PosInEarthS(east, north, 0.0), turnSign=turn_sign)
+
+    def test_straight_straight_interior_gets_radius(self) -> None:
+        inputs = [self._wpi(0.0, 0.0), self._wpi(1000.0, 0.0), self._wpi(1000.0, 1000.0)]
+        assign_transition_radius(inputs, 400.0)
+        self.assertEqual(inputs[0].r, 0.0)  # 首点不补
+        self.assertEqual(inputs[1].r, 400.0)  # 直-直内部拐点补 R
+        self.assertEqual(inputs[2].r, 0.0)  # 末点不补
+
+    def test_endpoints_never_get_radius(self) -> None:
+        inputs = [self._wpi(0.0, 0.0), self._wpi(100.0, 0.0)]
+        assign_transition_radius(inputs, 300.0)
+        self.assertEqual(inputs[0].r, 0.0)
+        self.assertEqual(inputs[1].r, 0.0)
+
+    def test_interior_next_to_incoming_curve_stays_zero(self) -> None:
+        # 入段(0->1)为曲线(turnSign!=0) → 拐点 1 不补 R，交给曲线自身。
+        inputs = [self._wpi(0.0, 0.0, turn_sign=1.0), self._wpi(1000.0, 0.0), self._wpi(1000.0, 1000.0)]
+        assign_transition_radius(inputs, 400.0)
+        self.assertEqual(inputs[1].r, 0.0)
+
+    def test_interior_next_to_outgoing_curve_stays_zero(self) -> None:
+        # 出段(1->2)为曲线 → 拐点 1 不补 R。
+        inputs = [self._wpi(0.0, 0.0), self._wpi(1000.0, 0.0, turn_sign=-1.0), self._wpi(1000.0, 1000.0)]
+        assign_transition_radius(inputs, 400.0)
+        self.assertEqual(inputs[1].r, 0.0)
+
+    def test_overwrites_preexisting_radius(self) -> None:
+        # 邻段变曲线时，旧的 r 必须被清掉，避免残留。
+        inputs = [self._wpi(0.0, 0.0), self._wpi(1000.0, 0.0, turn_sign=1.0), self._wpi(1000.0, 1000.0)]
+        inputs[1].r = 999.0
+        assign_transition_radius(inputs, 400.0)
+        self.assertEqual(inputs[1].r, 0.0)
+
+    def test_negative_radius_raises(self) -> None:
         with self.assertRaises(ValueError):
-            points_to_route([(0.0, 0.0), (1.0, 0.0)], turn_radius_m=20.0, speed_mps=-1.0)
+            assign_transition_radius([self._wpi(0.0, 0.0), self._wpi(1.0, 0.0)], -1.0)
 
 
 class AStarToRouteIntegrationTests(unittest.TestCase):
@@ -186,7 +224,7 @@ class AStarToRouteIntegrationTests(unittest.TestCase):
         raw = plan_path((0.0, 0.0), (1000.0, 0.0), obstacles, resolution_m=20.0, clearance_m=clearance, margin_m=300.0)
         self.assertIsNotNone(raw)
         simplified = simplify_path(raw, obstacles, clearance=clearance)
-        wpi = points_to_route(simplified, turn_radius_m=80.0, speed_mps=20.0, altitude_m=1000.0)
+        wpi = _route_with_radius(simplified, turn_radius_m=80.0, speed_mps=20.0, altitude_m=1000.0)
         lines = waypoint_inputs_to_waylines(wpi)
         self.assertGreaterEqual(len(lines), 1)
         # 起终点与规划一致。

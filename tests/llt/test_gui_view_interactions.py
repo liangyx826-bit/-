@@ -884,7 +884,7 @@ class GuiViewInteractionTests(unittest.TestCase):
 
     def test_packaged_startup_loads_config_ini_next_to_exe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            app_dir = Path(tmp)
+            app_dir = Path(tmp).resolve()  # macOS: /var → /private/var，与 default_project_root() 的真实路径对齐
             config_path = self._write_config_file(app_dir / "configs" / "packaged.json")
             state_path = app_dir / "config.ini"
             state_path.write_text("[config]\nlast_config = configs/packaged.json\n", encoding="utf-8")
@@ -907,7 +907,7 @@ class GuiViewInteractionTests(unittest.TestCase):
 
     def test_packaged_config_write_is_relative_to_exe_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            app_dir = Path(tmp)
+            app_dir = Path(tmp).resolve()  # macOS: /var → /private/var，与 default_project_root() 的真实路径对齐
             selected_config = self._write_config_file(app_dir / "configs" / "selected.json")
             state_path = app_dir / "config.ini"
 
