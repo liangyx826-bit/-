@@ -22,7 +22,7 @@ from src.ui.gui.main_window import (
     route_to_polyline,
 )
 
-CONFIG = str(Path(__file__).resolve().parents[2] / "configs" / "base.json")
+CONFIG = str(Path(__file__).resolve().parent / "fixtures" / "test.json")
 
 
 class ParseAvoidanceParamsTests(unittest.TestCase):
@@ -143,7 +143,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
 
     @staticmethod
     def _set_feasible_params(window: MainWindow) -> None:
-        # 用一组已知可飞的参数覆盖控件值，使“生成成功”相关用例不依赖 base.json 的具体 R/L。
+        # 用一组已知可飞的参数覆盖控件值，使“生成成功”相关用例不依赖夹具 test.json 的具体 R/L。
         window.turn_radius_spin.setValue(150.0)
         window.clearance_spin.setValue(120.0)
         window.leg_margin_spin.setValue(50.0)

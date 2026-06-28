@@ -712,7 +712,7 @@ class SimulationControllerTests(unittest.TestCase):
     def test_off_route_leader_turns_without_snaking_backward(self) -> None:
         """Leader should smoothly cut toward the route instead of weaving forward/backward."""
         controller = SimulationController()
-        controller.load_config("configs/base.json")
+        controller.load_config(str(Path(__file__).resolve().parent / "fixtures" / "test.json"))
         controller.pause()
         east_samples: list[float] = []
 

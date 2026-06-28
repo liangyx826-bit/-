@@ -9,7 +9,7 @@ from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import points_to_route
 from src.runner.sim_control import SimulationController
 
-CONFIG = str(Path(__file__).resolve().parents[2] / "configs" / "base.json")
+CONFIG = str(Path(__file__).resolve().parent / "fixtures" / "test.json")
 
 
 def _sample_route() -> list[WayPointInputS]:
