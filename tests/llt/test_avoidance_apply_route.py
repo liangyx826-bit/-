@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
-from src.algorithm.units.process.tra_plan.avoidance.path_to_route import points_to_route
+from src.algorithm.units.process.tra_plan.avoidance.path_to_route import assign_transition_radius, points_to_route
 from src.runner.sim_control import SimulationController
 
 CONFIG = str(Path(__file__).resolve().parent / "fixtures" / "test.json")
@@ -72,6 +72,17 @@ class ApplyAvoidanceRouteTests(unittest.TestCase):
     def test_apply_single_point_rejected(self) -> None:
         single = [WayPointInputS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=8.0)]
         self.assertEqual(self.controller.apply_avoidance_route(single).code, "ERR_CONFIG_INVALID")
+
+    def test_adopted_route_display_has_no_transition_arcs(self) -> None:
+        # 显示航线只画航段几何(直线)，交接圆弧(r)是转弯信息不画 → _display_route 全是直线段；
+        # 但飞行航线(_leader_route)仍带 r，长机照样平滑过弯。
+        route = points_to_route([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], speed_mps=20.0, altitude_m=1000.0)
+        assign_transition_radius(route, 300.0)
+        self.assertEqual(self.controller.apply_avoidance_route(route).code, "OK")
+        display = self.controller._display_route
+        assert display is not None
+        self.assertTrue(all(line.start.turnSign == 0.0 for line in display))
+        self.assertTrue(any(wpi.r > 0.0 for wpi in self.controller._leader_route))
 
     def test_apply_runs_after_adopt(self) -> None:
         self.controller.apply_avoidance_route(_sample_route())
