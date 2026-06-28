@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
-from PySide6.QtCore import QMargins, QPoint, QPointF, QSignalBlocker, Qt
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtCore import QMargins, QPoint, QPointF, QSize, QSignalBlocker, Qt
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QAbstractItemView,
@@ -152,6 +152,32 @@ X_MARGIN_S = 0.5
 # 窗口内部使用左闭右开区间，减少边界重复计入。
 # 导出只写汇总指标，不写滑动窗口曲线。
 # 弹窗只镜像主窗口当前状态，不保存独立分析参数。
+
+
+def _make_expand_icon(color: QColor) -> QIcon:
+    """创建四角放大图标。注意：避免依赖字体字形渲染。"""
+    pixmap = QPixmap(18, 18)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(color, 1.8)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    margin = 4
+    length = 3
+    outer = 18 - margin - 1
+    # 四个 L 形角标组成放大按钮图标，和实时显示区的视觉语言保持一致。
+    painter.drawLine(margin, margin, margin + length, margin)
+    painter.drawLine(margin, margin, margin, margin + length)
+    painter.drawLine(outer, margin, outer - length, margin)
+    painter.drawLine(outer, margin, outer, margin + length)
+    painter.drawLine(margin, outer, margin + length, outer)
+    painter.drawLine(margin, outer, margin, outer - length)
+    painter.drawLine(outer, outer, outer - length, outer)
+    painter.drawLine(outer, outer, outer, outer - length)
+    painter.end()
+    return QIcon(pixmap)
 
 
 class ChartPopupDialog(QDialog):
@@ -434,11 +460,33 @@ class DataAnalysisWindow(QDialog):
         header = QHBoxLayout()
         title = QLabel("滑动窗口曲线")
         title.setStyleSheet("font-size: 18px; font-weight: 700;")
-        popup_btn = QPushButton("□")
+        popup_btn = QPushButton()
         popup_btn.setObjectName("offlineChartPopupButton")
-        popup_btn.setFixedSize(28, 28)
-        # 符号按钮贴近草图，含义通过 tooltip 说明。
+        popup_btn.setFixedSize(36, 36)
+        popup_btn.setIcon(_make_expand_icon(QColor("#102a43")))
+        popup_btn.setIconSize(QSize(18, 18))
+        popup_btn.setStyleSheet(
+            """
+            QPushButton#offlineChartPopupButton {
+                background: #f4f9fe;
+                border: 1px solid #cbd8e6;
+                border-radius: 8px;
+                padding: 0;
+            }
+            QPushButton#offlineChartPopupButton:hover {
+                background: #edf6fd;
+                border-color: #b8c9d9;
+            }
+            QPushButton#offlineChartPopupButton:pressed {
+                background: #e4eef8;
+                border-color: #94a3b8;
+                padding: 0;
+            }
+            """
+        )
+        # 纯图标按钮通过 tooltip 和无障碍名称表达含义。
         popup_btn.setToolTip("弹出图表窗口")
+        popup_btn.setAccessibleName("弹出图表窗口")
         popup_btn.clicked.connect(self._open_chart_popup)
         self._status_label = QLabel("")
         self._status_label.setStyleSheet("color: #64748b;")
