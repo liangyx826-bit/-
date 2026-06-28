@@ -35,6 +35,7 @@ from src.algorithm.context.leaf_types import (
     WayPointInputS,
     WayPointS,
     copy_motion,
+    to_display_inputs,
 )
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
@@ -1690,9 +1691,9 @@ class SimulationController:
         self._leader_route = leader_route
         # 前向/垂向速度指令限幅(串级 P+PI 外环输出)，由配置注入各节点实体。
         vel_cmd_limit = _build_vel_cmd_limit(config)
-        # 显示用航线(list[WayLineS])：覆盖时含圆弧，否则按配置原始航段(不插圆弧)。
+        # 显示用航线(list[WayLineS])：只画航段几何，去掉交接半径 r(转弯信息)，与配置航线显示一致。
         if self._leader_route_override is not None:
-            _display_wpi = self._leader_route_override
+            _display_wpi = to_display_inputs(self._leader_route_override)
         else:
             _display_wpi = _build_leader_route(config, insert_arcs=False)
         self._display_route = waypoint_inputs_to_waylines(_display_wpi) if len(_display_wpi) >= 2 else None

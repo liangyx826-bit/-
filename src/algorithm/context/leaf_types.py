@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from enum import IntEnum
 
 
@@ -157,6 +157,16 @@ class WayPointInputS:
     r: float = 0.0  # 该拐点处的期望圆弧半径(米)；0=不做圆弧；首末点无意义
     turnSign: float = 0.0  # 该点之后一段的转向(已知圆弧时填入)；0 表示直线或待按 r 计算
     center: PosInEarthS = field(default_factory=PosInEarthS)  # 圆弧圆心(turnSign!=0 时有意义)
+
+
+def to_display_inputs(route: list[WayPointInputS]) -> list[WayPointInputS]:
+    """生成显示用航点：去掉转弯信息（交接半径 r），保留航段曲率（turnSign）。
+
+    显示只画"航段几何"——直线航段画直线、曲率航段画曲线；拐点的交接圆弧属于"转弯信息"，
+    由飞行时按 r 平滑，不进入显示。配置航线/避障预览/避障采用三处显示统一走此规则。
+    注意：浅拷贝，pos/center 仍共享引用，仅供只读渲染使用。
+    """
+    return [replace(wpi, r=0.0) for wpi in route]
 
 
 @dataclass

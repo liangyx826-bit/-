@@ -14,7 +14,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
+from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
+from src.algorithm.units.algo.arc_path import corner_arc
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import assign_transition_radius, points_to_route
 from src.ui.gui.main_window import (
     MainWindow,
@@ -113,12 +115,24 @@ class RouteToPolylineTests(unittest.TestCase):
         self.assertEqual(poly[0], (0.0, 0.0))
         self.assertEqual(poly[-1], (100.0, 0.0))
 
-    def test_arc_route_is_sampled(self) -> None:
+    def test_transition_radius_not_drawn_as_arc(self) -> None:
+        # 交接半径 r 是“转弯信息”，显示不画；直线航段画直线 → 折线即骨架顶点(尖角)。
         route = points_to_route([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], speed_mps=20.0)
         assign_transition_radius(route, 200.0)
         poly = route_to_polyline(route)
-        # 圆弧被采样为多点，折线点数应明显多于航段数。
-        self.assertGreater(len(poly), len(waypoint_inputs_to_waylines(route)))
+        self.assertEqual(poly, [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)])
+
+    def test_curved_segment_is_sampled(self) -> None:
+        # 真正的曲率航段(turnSign!=0)是“航段信息”，显示要画成弧 → 采样成多点。
+        t1, t2, center, sign = corner_arc(
+            PosInEarthS(0.0, 0.0, 0.0), PosInEarthS(1000.0, 0.0, 0.0), PosInEarthS(1000.0, 1000.0, 0.0), 200.0
+        )
+        route = [
+            WayPointInputS(idx=0, pos=t1, turnSign=sign, center=center),
+            WayPointInputS(idx=1, pos=t2),
+        ]
+        poly = route_to_polyline(route)
+        self.assertGreater(len(poly), 2)
 
 
 class AvoidanceUiFlowTests(unittest.TestCase):

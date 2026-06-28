@@ -72,7 +72,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.algorithm.context.leaf_types import WayLineS, WayPointInputS
+from src.algorithm.context.leaf_types import WayLineS, WayPointInputS, to_display_inputs
 from src.algorithm.units.algo.arc_path import arc_radius as _arc_radius_fn, arc_swept_rad
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import ObstacleS, make_circle, make_rect
@@ -377,10 +377,14 @@ def _sample_wayline_arc(line: WayLineS, step_deg: float = 6.0) -> list[tuple[flo
 
 
 def route_to_polyline(route: list[WayPointInputS]) -> list[tuple[float, float]]:
-    """把 WayPointInputS 列表展开为折线点，供俯视图绘制预览航线。"""
+    """把 WayPointInputS 列表展开为折线点，供俯视图绘制预览航线。
+
+    显示只画航段几何：去掉转弯信息（交接半径 r），直线航段画直线、曲率航段（turnSign）画弧。
+    与配置航线/避障采用后的显示规则一致（见 leaf_types.to_display_inputs）。
+    """
     if len(route) < 2:
         return []
-    lines = waypoint_inputs_to_waylines(route)
+    lines = waypoint_inputs_to_waylines(to_display_inputs(route))
     raw: list[tuple[float, float]] = []
     for line in lines:
         if line.start.turnSign != 0.0:
