@@ -37,7 +37,7 @@ A\* 只负责"从障碍哪一边绕"（**拓扑**）；飞机本体约束由"膨
 
 > 图源：[避障-A星-数据流.drawio](./避障-A星-数据流.drawio)
 
-链路：`原航线航点 → 逐腿 A*（栅格折线）→ 视线去冗余 → 可飞性校验 → points_to_route → list[WayPointInputS]`。只要出口产出合法 `list[WayPointInputS]`，**下游链路（`waypoint_inputs_to_waylines → LeaderRoute` 选段 → 位置跟踪环 → 三自由度模型、僚机编队、俯视图）全部零改动**。
+链路：`原航线航点 → 逐腿 A*（栅格折线）→ 视线去冗余 → 可飞性校验 → points_to_route（只摆点）→ assign_transition_radius（补交接半径）→ list[WayPointInputS]`。只要出口产出合法 `list[WayPointInputS]`，**下游链路（`waypoint_inputs_to_waylines → LeaderRoute` 选段 → 位置跟踪环 → 三自由度模型、僚机编队、俯视图）全部零改动**。
 
 ---
 
@@ -131,7 +131,7 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 ```jsonc
 "avoidance": {
   "enabled": true,
-  "allow_arc": true,             // 交付编码：true=圆弧段；false=外切线直连原拐点（见 §4.3）
+  "allow_arc": true,             // 航段自身是否可为曲线（贴障弧线段，预留）；不影响拐点交接圆弧（见 §4.3）
   "turn_radius_m": 200.0,        // R，人工配置（见 3.1）
   "leg_length_margin_m": 80.0,   // L，拐点间最短直线余度
   "clearance_m": 120.0,          // 障碍膨胀安全距离
@@ -158,26 +158,33 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 - 顶层 `enabled=false` 或 `obstacles` 为空 → 完全跳过避障，等价于现状。
 - 每个障碍带 `id`（界面列表显示 / 勾选用）与 `enabled`（默认勾选状态）。JSON 是**障碍库**，界面再从中**勾选本次启用的子集**——只对勾选项规划，未勾选的不参与（见 §6）。
 - 长机原航线取自 `route.waypoints[]`，航点坐标兼容 `x_m/east`、`y_m/north`、`altitude_m/h` 两套字段名（与控制器 `_route_point_from_config` 一致）。
-- `allow_arc`（默认 `true`）：交付编码开关，见 §4.3。
+- `allow_arc`（默认 `true`）：航段自身是否可为曲线（贴障弧线段）的预留开关，**不影响**直线-直线拐点的交接圆弧（后者由补充函数无条件按 R 补），见 §4.3。
 - `simplify_clearance_m`（缺省等于 `clearance_m`）：只影响 A* 输出后的 `simplify_path` 视线拉直。设为 `clearance_m` 时保持旧行为；调小可减少锯齿折线保留的中间拐点，但安全复核仍由后续可飞性校验兜底。
 - `turn_switch_penalty_m`（默认 `0.0`）：A* 搜索中每次 8 邻域方向切换的固定等效米代价，用于减少方向频繁切换导致的小直线段。
 - `turn_angle_weight_m`（默认 `0.0`）：A* 搜索中每 45° 航迹角变化的线性等效米代价，用于抑制少数过硬的大角度换向。两个航迹角惩罚都为 0 时，代码走旧 A* 分支，路径逐点兼容。
 
-### 4.3 交付编码：圆弧段 vs 外切线（`allow_arc`）
+### 4.3 交接半径补充与 `allow_arc`（两件正交的事）
 
-部分客户的下游（自驾仪 / 航线格式）**不支持圆弧航段**，只接受直线段。`avoidance.allow_arc` 决定避障航线在拐点处**如何编码交付**，但**不改变可飞性判据**：
+这里有**两个互相独立**的概念，曾被混在一个开关里，现已拆开：
 
-| | `allow_arc: true`（默认） | `allow_arc: false`（外切线） |
+1. **交接半径 R（拐点圆弧）**：两条**直线航段**在拐点处用多大半径平滑过渡。这是避障输出的固有动作，**与 `allow_arc` 无关**，由补充函数 `assign_transition_radius()` 在可飞性校验**之后**统一补：凡"入段、出段都是直线"的内部拐点都设 `WayPointInputS.r=turn_radius_m`，再由 `waypoint_inputs_to_waylines()` 展开为相切圆弧 `WayLineS`（`start.turnSign≠0`）。
+2. **航段自身曲率（`allow_arc`）**：指**航段本身是不是一条曲线**（例如将来贴着障碍边界走的弧线段），而不是拐点怎么交接。`allow_arc=false` 表示所有航段（腿）都是直线，`allow_arc=true` 才允许出现"航段即曲线"。
+
+二者正交：`allow_arc=false`（航段都是直线）时，直线-直线拐点**照样**按 R 切交接圆弧——这正是"长机自动在两航段之间加交接圆弧"的能力来源。`allow_arc` 只控制航段骨架能否弯，不会取消拐点交接圆弧。
+
+| | 拐点交接圆弧（R） | 航段自身曲率（`allow_arc`） |
 | --- | --- | --- |
-| 拐点编码 | `WayPointInputS.r=R` → 转换后得相切**圆弧** `WayLineS`（`start.turnSign≠0`） | `WayPointInputS.r=0` → 转换后为直线（`start.turnSign=0`），直连原拐点 |
-| §3.2 可飞性校验 | 按真实 R 校验（急拐 / 腿长 / 圆弧触障） | **同样按真实 R 校验**，不可飞两种编码都拒 |
-| 几何关系 | 圆弧内切于拐角，贴近被绕障碍一侧 | 顶点在转弯**外侧**，离障碍更远，更保守 |
+| 含义 | 两直线段之间的过渡半径 | 航段本身是否为曲线（贴障弧线段） |
+| 来源 | `assign_transition_radius()`，按航段关系无条件补 | `allow_arc` 开关（预留） |
+| 受 `allow_arc` 影响 | **否** | 是 |
 
-关键点:**`allow_arc` 只决定最终航段怎么编码,不决定能不能飞**。哪怕交付外切线折角,飞机过弯仍要半径 R 装得下、不触障——所以 `check_feasibility`（§3.2、§7.2）两种模式**完全一致地跑**,`allow_arc=false` 不会绕过校验。客户自驾仪到顶点按自身半径（≤R）圆一下,仍在已验证的安全包络内。
+**补充函数的航段关系判定**：内部拐点 `i`，若入段 `(i-1→i)` 与出段 `(i→i+1)` 都是直线（其起点 `turnSign==0`）→ `r=R`；任一邻段为曲线（`turnSign≠0`，如将来的贴障弧线段）→ `r=0`，交接交给曲线自身；首末点不补。
 
-**作用域仅避障输出**:`allow_arc` 不耦合长机配置航线（后者的圆弧由 `sim_control._build_leader_route(insert_arcs=...)` 各自管理）。
+**现状**：当前 A\* / 去冗余只产出直线折线，尚无"贴障弧线段"产生者，故 `allow_arc` 暂无实际效果（两种取值输出一致），它是为将来贴障曲率预留的开关。无论取值，`check_feasibility`（§3.2、§7.2）始终按真实 R 校验，先校验后补 R——直线段本就是该圆弧的外切线、半径即配置值，校验既过，补 R 必不触障。
 
-> 实现：`points_to_route(..., insert_arcs=allow_arc)`——`False` 时所有拐点走"直连"分支,产出穿过各原拐点的纯直线折线;`plan_avoidance_route(..., allow_arc=...)` 透传,`check_feasibility` 调用不受影响。
+**作用域仅避障输出**：`allow_arc` 与补充函数都只作用于避障航线；长机配置航线的逐点 `R` 由用户在 `route.waypoints[*].R` 显式给定，经 `sim_control._build_leader_route(insert_arcs=...)` 各自管理，不走补充函数。
+
+> 实现：`points_to_route(...)` 只摆点（`r` 一律 0），随后 `assign_transition_radius(route, turn_radius_m)` 按航段关系补 R；`plan_avoidance_route(..., allow_arc=...)` 透传该开关（当前不影响交接圆弧）。
 
 ---
 
@@ -191,7 +198,7 @@ src/algorithm/units/process/tra_plan/
 └── avoidance/
     ├── obstacle.py                # ObstacleS + 唯一形状基元 inside() / blocked()（圆 / 矩形）
     ├── astar.py                   # 栅格化 + A* 内核 plan_path()，格子判定调 inside()
-    ├── path_to_route.py           # line_of_sight_clear + simplify_path + points_to_route（圆弧出口）
+    ├── path_to_route.py           # line_of_sight_clear + simplify_path + points_to_route（只摆点）+ assign_transition_radius（补交接半径）
     ├── feasibility.py             # check_feasibility（腿长 + 圆弧采样逐点调 inside()）
     └── planner.py                 # plan_avoidance_route：逐腿编排上面四步，产出 PlanResult
 ```
@@ -210,7 +217,7 @@ def plan_avoidance_route(
 ) -> PlanResult
 ```
 
-**逐腿规划**保形：对原航线每条腿 `waypoints[i]→[i+1]` 独立跑 `plan_path → simplify_path`，再拼接（丢掉相邻腿重合的衔接点）、去重，整体做一次 `check_feasibility`（始终按真实 R），最后 `points_to_route(insert_arcs=allow_arc)` 按交付编码生成圆弧或外切线航线（见 §4.3）。高度按水平里程在腿两端间线性插值。`simplify_clearance_m=None` 时回退到 `clearance_m`，保证旧调用方不传新参数时仍使用原来的去冗余安全距离。
+**逐腿规划**保形：对原航线每条腿 `waypoints[i]→[i+1]` 独立跑 `plan_path → simplify_path`，再拼接（丢掉相邻腿重合的衔接点）、去重，整体做一次 `check_feasibility`（始终按真实 R），最后 `points_to_route()` 摆点（`r=0`）、`assign_transition_radius()` 给直线-直线拐点补交接半径 R（见 §4.3）。高度按水平里程在腿两端间线性插值。`simplify_clearance_m=None` 时回退到 `clearance_m`，保证旧调用方不传新参数时仍使用原来的去冗余安全距离。
 
 ```python
 @dataclass

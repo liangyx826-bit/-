@@ -299,7 +299,7 @@ class AvoidanceParams:
     resolution_m: float = 10.0
     margin_m: float = 0.0
     speed_mps: float = 0.0
-    allow_arc: bool = True  # 交付编码：True=圆弧段；False=外切线直连原拐点（不支持圆弧的下游）
+    allow_arc: bool = True  # 航段自身是否可为曲线（贴障弧线段，预留）；不影响拐点交接圆弧
     waypoints: list[tuple[float, float, float]] = field(default_factory=list)  # (east, north, altitude)
 
 
@@ -2340,9 +2340,9 @@ class MainWindow(QMainWindow):
             param_grid.addWidget(label, row, 0)
             param_grid.addWidget(spin, row, 1)
         avoidance_layout.addLayout(param_grid)
-        # 航段带圆弧：勾选=拐点输出圆弧；取消=外切线直连原拐点（不支持圆弧的下游）。
+        # 航段带圆弧：航段自身是否可为曲线（贴障弧线段，预留）；不影响拐点交接圆弧（恒按 R 补）。
         self.allow_arc_check = QCheckBox("航段带圆弧")
-        self.allow_arc_check.setToolTip("勾选：拐点输出圆弧段；取消：外切线直连原拐点（供不支持圆弧航段的下游）")
+        self.allow_arc_check.setToolTip("航段自身是否可为曲线（贴障弧线段，预留功能）；直线-直线拐点的交接圆弧始终按转弯半径补充，与此无关")
         self.allow_arc_check.toggled.connect(self._on_avoidance_param_changed)
         avoidance_layout.addWidget(self.allow_arc_check)
         # 生成航线 / 采用航线并排一行，平分宽度，把横向空间用满。
