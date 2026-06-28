@@ -20,7 +20,9 @@ from src.algorithm.units.algo.arc_path import corner_arc
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import assign_transition_radius, points_to_route
 from src.ui.gui.main_window import (
     MainWindow,
+    ReferenceRoute,
     parse_avoidance_params,
+    reference_route_points,
     route_to_polyline,
 )
 
@@ -121,6 +123,27 @@ class RouteToPolylineTests(unittest.TestCase):
         assign_transition_radius(route, 200.0)
         poly = route_to_polyline(route)
         self.assertEqual(poly, [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)])
+
+    def test_reference_straight_segment_two_points(self) -> None:
+        seg = ReferenceRoute(0.0, 0.0, 1000.0, 100.0, 0.0, 1000.0)
+        self.assertEqual(reference_route_points(seg), [(0.0, 0.0), (100.0, 0.0)])
+
+    def test_reference_arc_segment_is_sampled(self) -> None:
+        # committed 航段若是圆弧(radius>0)，应采样成多点(与预览一致)，而非切弦两点。
+        import math
+
+        seg = ReferenceRoute(
+            start_x=400.0, start_y=0.0, start_altitude=1000.0,
+            end_x=0.0, end_y=400.0, end_altitude=1000.0,
+            radius=400.0, center_x=0.0, center_y=0.0, turn_sign=1.0,
+        )
+        pts = reference_route_points(seg)
+        self.assertGreater(len(pts), 2)
+        self.assertAlmostEqual(pts[0][0], 400.0, places=6)
+        self.assertAlmostEqual(pts[-1][1], 400.0, places=6)
+        # 每个采样点到圆心距离≈半径。
+        for east, north in pts:
+            self.assertAlmostEqual(math.hypot(east, north), 400.0, places=6)
 
     def test_curved_segment_is_sampled(self) -> None:
         # 真正的曲率航段(turnSign!=0)是“航段信息”，显示要画成弧 → 采样成多点。

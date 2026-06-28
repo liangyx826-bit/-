@@ -192,6 +192,35 @@ class ReferenceRoute:
     end_x: float
     end_y: float
     end_altitude: float
+    radius: float = 0.0  # 圆弧半径；>0 表示本段为圆弧（俯视图按弧采样）
+    center_x: float = 0.0  # 圆弧圆心 east（radius>0 有意义）
+    center_y: float = 0.0  # 圆弧圆心 north
+    turn_sign: float = 0.0  # 转向：+1 左转/逆时针、-1 右转/顺时针
+
+
+def reference_route_points(route: ReferenceRoute, step_deg: float = 6.0) -> list[tuple[float, float]]:
+    """把单个参考航段展开为世界坐标折线点：直线段返回两端点，圆弧段按 step_deg 采样。
+
+    与预览 route_to_polyline 的采样口径一致，使 committed 航线与预览对同一圆弧画法相同。
+    """
+    if route.radius <= 0.0 or route.turn_sign == 0.0:
+        return [(route.start_x, route.start_y), (route.end_x, route.end_y)]
+    a_start = math.atan2(route.start_y - route.center_y, route.start_x - route.center_x)
+    a_end = math.atan2(route.end_y - route.center_y, route.end_x - route.center_x)
+    delta = math.atan2(math.sin(a_end - a_start), math.cos(a_end - a_start))  # wrap 到 (-pi,pi]
+    # 取与 turn_sign 同向的扫掠；wrap 后符号相反则补一圈（与 arc_path.arc_swept_rad 同口径）。
+    if route.turn_sign >= 0.0 and delta < 0.0:
+        delta += 2.0 * math.pi
+    elif route.turn_sign < 0.0 and delta > 0.0:
+        delta -= 2.0 * math.pi
+    segments = max(1, int(abs(math.degrees(delta)) / step_deg))
+    return [
+        (
+            route.center_x + route.radius * math.cos(a_start + delta * (k / segments)),
+            route.center_y + route.radius * math.sin(a_start + delta * (k / segments)),
+        )
+        for k in range(segments + 1)
+    ]
 
 
 @dataclass
@@ -838,6 +867,10 @@ class ControllerSimulationAdapter:
             end_x=route.end_x_m,
             end_y=route.end_y_m,
             end_altitude=route.end_altitude_m,
+            radius=route.radius_m,
+            center_x=route.center_x_m,
+            center_y=route.center_y_m,
+            turn_sign=route.turn_sign,
         )
 
     def _visible_disturbance(self, snapshot: ControllerSnapshot) -> str:
@@ -1508,12 +1541,14 @@ class TopView(QGraphicsView):
         routes = self._route_segments()
         if not routes:
             return
-        # 航线用虚线绘制（线宽随缩放归一）；每段首尾相接。
+        # 航线用虚线绘制（线宽随缩放归一）；圆弧段按弧采样，与预览画法一致。
         pen = QPen(self.theme.route, 2.0 / self.scale_value)
         pen.setDashPattern([8, 7])
         painter.setPen(pen)
         for route in routes:
-            painter.drawLine(QPointF(route.start_x, route.start_y), QPointF(route.end_x, route.end_y))
+            points = reference_route_points(route)
+            for start, end in zip(points, points[1:]):
+                painter.drawLine(QPointF(start[0], start[1]), QPointF(end[0], end[1]))
         # 再画航点圆点：起点一个 + 每段终点各一个（半径随缩放归一）。
         painter.setBrush(self.theme.ink)
         painter.setPen(Qt.PenStyle.NoPen)
