@@ -1,9 +1,10 @@
 """出口翻译：A* 锯齿格点 → 视线去冗余 → WayPointInputS 列表。
 
-职责（见 docs/避障-A星-开发计划.md §6 步骤3）：
+职责（见 docs/避障-A星-设计文档.md §4.3、§6）：
 - simplify_path()：视线可达去冗余，把栅格锯齿拉直成尽量少的拐点（拉直段不得穿障碍）。
-- points_to_route()：拐点设 r=turn_radius_m，返回 list[WayPointInputS]；
-  圆弧几何由 leader.init() 中的 _waypoint_inputs_to_waylines() 统一计算。
+- points_to_route()：只摆点，返回 list[WayPointInputS]，r 一律 0（不决策交接半径）。
+- assign_transition_radius()：可飞性校验后，给两侧均为直线段的内部拐点补 r=turn_radius_m。
+  圆弧几何由 leader.init() 中的 waypoint_inputs_to_waylines() 统一计算。
 
 圆弧是否真正可飞（腿长 ≥ d_in+d_out+L、圆弧不触障）留待步骤4 可飞性校验。
 """
