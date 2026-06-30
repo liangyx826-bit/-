@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
-from src.algorithm.units.process.tra_plan.avoidance.feasibility import ERR_LEG_TOO_SHORT
+from src.algorithm.units.process.tra_plan.avoidance.feasibility import ERR_LEG_TOO_SHORT, ERR_STRAIGHT_HITS_OBSTACLE
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import blocked, make_circle, make_rect
 from src.algorithm.units.process.tra_plan.avoidance.planner import (
     ERR_ENDPOINT_IN_OBSTACLE,
@@ -62,6 +62,28 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
 
         self.assertTrue(result.ok, result.detail)
         plan_path_mock.assert_not_called()
+
+    def test_prefiltered_obstacle_on_detour_is_rejected_by_final_check(self) -> None:
+        params = dict(
+            turn_radius_m=0.0,
+            leg_margin_m=0.0,
+            clearance_m=0.0,
+            simplify_clearance_m=0.0,
+            speed_mps=20.0,
+            resolution_m=20.0,
+            margin_m=100.0,
+            allow_arc=False,
+        )
+        obstacles = [
+            make_rect("A_big_wall", 400.0, -1000.0, 600.0, 100.0),
+            make_rect("B_top_blocker", 400.0, 120.0, 700.0, 360.0),
+        ]
+
+        result = plan_avoidance_route([(0.0, 0.0, 1000.0), (1000.0, 0.0, 1000.0)], obstacles, **params)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.code, ERR_STRAIGHT_HITS_OBSTACLE)
+        self.assertEqual(result.obstacle_id, "B_top_blocker")
 
     def test_single_circle_on_leg_is_detoured(self) -> None:
         obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]
