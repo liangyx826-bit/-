@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.algorithm.units.process.tra_plan.avoidance.feasibility import ERR_LEG_TOO_SHORT
@@ -45,6 +46,23 @@ def _straights_collision_free(result: PlanResult, obstacles, clearance) -> bool:
     return True
 
 
+def _route_collision_hits(result: PlanResult, obstacles, clearance: float = 0.0) -> list[tuple[int, str]]:
+    """按展开航段采样检查真实障碍触碰；返回 (航段序号, 障碍 id)。"""
+    hits: list[tuple[int, str]] = []
+    for line_index, line in enumerate(_route_lines(result)):
+        for sample_index in range(1001):
+            ratio = sample_index / 1000.0
+            east = line.start.pos.east + (line.end.pos.east - line.start.pos.east) * ratio
+            north = line.start.pos.north + (line.end.pos.north - line.start.pos.north) * ratio
+            for obstacle in obstacles:
+                if blocked([obstacle], east, north, clearance):
+                    hits.append((line_index, obstacle.id))
+                    break
+            if hits and hits[-1][0] == line_index:
+                break
+    return hits
+
+
 class PlanAvoidanceRouteTests(unittest.TestCase):
     def test_no_obstacles_follows_original_route(self) -> None:
         wps = [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)]
@@ -53,6 +71,56 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         lines = _route_lines(result)
         self.assertEqual(lines[0].start.pos.east, 0.0)
         self.assertEqual(lines[-1].end.pos.east, 2000.0)
+
+    def test_clear_leg_skips_astar_search(self) -> None:
+        wps = [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0), (4000.0, 0.0, 1000.0)]
+        with patch("src.algorithm.units.process.tra_plan.avoidance.planner.plan_path") as plan_path_mock:
+            result = plan_avoidance_route(wps, [], **COMMON)
+
+        self.assertTrue(result.ok, result.detail)
+        plan_path_mock.assert_not_called()
+
+    def test_prefiltered_obstacle_on_detour_falls_back_to_full_obstacles(self) -> None:
+        params = dict(
+            turn_radius_m=0.0,
+            leg_margin_m=0.0,
+            clearance_m=0.0,
+            simplify_clearance_m=0.0,
+            speed_mps=20.0,
+            resolution_m=20.0,
+            margin_m=100.0,
+            allow_arc=False,
+        )
+        obstacles = [
+            make_rect("A_big_wall", 400.0, -1000.0, 600.0, 100.0),
+            make_rect("B_top_blocker", 400.0, 120.0, 700.0, 360.0),
+        ]
+
+        result = plan_avoidance_route([(0.0, 0.0, 1000.0), (1000.0, 0.0, 1000.0)], obstacles, **params)
+
+        self.assertTrue(result.ok, result.detail)
+        self.assertEqual(_route_collision_hits(result, obstacles), [])
+
+    def test_prefiltered_obstacle_clearance_violation_falls_back_to_full_obstacles(self) -> None:
+        params = dict(
+            turn_radius_m=0.0,
+            leg_margin_m=0.0,
+            clearance_m=50.0,
+            simplify_clearance_m=50.0,
+            speed_mps=20.0,
+            resolution_m=20.0,
+            margin_m=100.0,
+            allow_arc=False,
+        )
+        obstacles = [
+            make_rect("A_big_wall", 400.0, -1000.0, 600.0, 100.0),
+            make_rect("B_220", 400.0, 220.0, 700.0, 300.0),
+        ]
+
+        result = plan_avoidance_route([(0.0, 0.0, 1000.0), (1000.0, 0.0, 1000.0)], obstacles, **params)
+
+        self.assertTrue(result.ok, result.detail)
+        self.assertEqual(_route_collision_hits(result, obstacles, 50.0), [])
 
     def test_single_circle_on_leg_is_detoured(self) -> None:
         obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]
