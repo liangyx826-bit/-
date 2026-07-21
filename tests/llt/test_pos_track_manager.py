@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from src.algorithm.context.leaf_types import (
     AccInEarthS,
@@ -52,6 +53,26 @@ def _entity_cfg(profile: EntityProfileS = LEADER_PROFILE) -> EntityManagerInitS:
     )
 
 
+def _no_inertial_follower_profile() -> EntityProfileS:
+    """复制僚机策略表并仅把位置跟踪切为无非惯性补偿产品。"""
+
+    return replace(
+        FOLLOWER_PROFILE,
+        route_changes=tuple(
+            replace(
+                change,
+                strategies=replace(
+                    change.strategies,
+                    pos_track=PosTrackStrategyE.PID_POSITION_NO_INERTIAL,
+                ),
+            )
+            if change.strategies.pos_track == PosTrackStrategyE.PID_POSITION
+            else change
+            for change in FOLLOWER_PROFILE.route_changes
+        ),
+    )
+
+
 class PosTrackManagerTests(unittest.TestCase):
     """验证显式配置、固定映射和缓存产品。"""
 
@@ -77,6 +98,52 @@ class PosTrackManagerTests(unittest.TestCase):
                 PosTrackStrategyE.PID_POSITION,
             },
         )
+
+    def test_follower_profile_removes_turn_transport_and_centripetal_feedforward(self) -> None:
+        """无非惯性补偿产品应移除槽位运输速度和向心前馈，但不得改写位置解算原始指令。"""
+
+        runtime = _runtime()
+        runtime.context.cmd.stage = FormStageE.HOLD
+        runtime.context.cmd.step = RallyPhaseE.JOINING
+        runtime.context.leaderState = MotionProfS(
+            pos=PosInEarthS(0.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0, dVPsi=0.1),
+        )
+        runtime.context.leaderCmd = MotionProfS(
+            pos=PosInEarthS(0.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0, dVPsi=0.1),
+        )
+        runtime.context.selfState = MotionProfS(
+            pos=PosInEarthS(40.0, -30.0, 500.0),
+            v=VdInEarthS(vEast=21.0, vNorth=-2.0, vd=(21.0**2 + 2.0**2) ** 0.5),
+        )
+        # r=(40,-30)，omega=0.1 时 omega×r=(3,4)；另保留 TD 重构速度 (1,-2)。
+        runtime.context.selfCmd = MotionProfS(
+            pos=PosInEarthS(40.0, -30.0, 500.0),
+            v=VdInEarthS(
+                vEast=24.0,
+                vNorth=2.0,
+                vd=(24.0**2 + 2.0**2) ** 0.5,
+                dVPsi=0.1,
+            ),
+        )
+        manager = PosTrackManager()
+        manager.bind(runtime)
+        manager.init(_entity_cfg(_no_inertial_follower_profile()))
+
+        manager.step()
+
+        self.assertAlmostEqual(runtime.context.selfAccCmd.accEast, 0.0)
+        self.assertAlmostEqual(runtime.context.selfAccCmd.accNorth, 0.0)
+        self.assertAlmostEqual(runtime.context.effectiveCmd.v.vEast, 21.0)
+        self.assertAlmostEqual(runtime.context.effectiveCmd.v.vNorth, -2.0)
+        self.assertAlmostEqual(runtime.context.effectiveCmd.v.dVPsi, 0.0)
+        self.assertAlmostEqual(runtime.posTrackDiag.cmd_vel_east_mps, 21.0)
+        self.assertAlmostEqual(runtime.posTrackDiag.cmd_vel_north_mps, -2.0)
+        # 供其他模块读取的 PosCalc 原始目标不能被消融产品原地修改。
+        self.assertAlmostEqual(runtime.context.selfCmd.v.vEast, 24.0)
+        self.assertAlmostEqual(runtime.context.selfCmd.v.vNorth, 2.0)
+        self.assertAlmostEqual(runtime.context.selfCmd.v.dVPsi, 0.1)
 
     def test_stage_step_selects_cached_product_instead_of_pos_calc_command(self) -> None:
         """运行期应查完整表，不能继续按 PosCalc 控制命令选择产品。"""

@@ -48,6 +48,7 @@ class PosTrackStrategyE(IntEnum):
     NOOP = 0  # 空控制产品
     PID_SPEED = 1  # 前向速度 PID 组合产品
     PID_POSITION = 2  # 前向位置和速度 PID 组合产品
+    PID_POSITION_NO_INERTIAL = 3  # 不含槽位旋转运输速度和转弯向心前馈的位置跟踪产品
 
 
 @dataclass
