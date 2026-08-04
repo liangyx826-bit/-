@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.runner.sim_control import GeoPointInput, ObstacleInput, ObstacleLibraryData, RunState
 from src.ui.gui.avoidance_panel_view_model import (
     adopt_enabled,
     avoidance_status_text,
@@ -34,6 +35,7 @@ from src.ui.gui.avoidance_tools import (
     obstacle_spec_to_view,
     obstacle_view_to_spec,
 )
+from src.ui.gui.obstacle_editor import ObstacleEditorDialog
 
 _JSON_ROUTE_FILTER = "JSON 文件 (*.json)"
 _DIAMOND_XML_ROUTE_FILTER = "钻石 XML (*.XML *.xml)"
@@ -88,6 +90,11 @@ class MainWindowAvoidanceMixin:
         self.obstacle_list_layout.setContentsMargins(0, 0, 0, 0)
         self.obstacle_list_layout.setSpacing(6)
         layout.addWidget(self.obstacle_list_container)
+        # 编辑入口操作外部经纬度障碍库，与下方“本次规划是否启用”的复选框语义分离。
+        self.edit_obstacle_library_button = QPushButton("配置障碍区信息…")
+        self.edit_obstacle_library_button.setToolTip("新增、修改或删除障碍，并保存到当前配置引用的 JSON 文件。")
+        self.edit_obstacle_library_button.clicked.connect(self._open_obstacle_editor)
+        layout.addWidget(self.edit_obstacle_library_button)
         # 摘要区替代草图里的说明卡，保留必要状态但不占太多空间。
         self.obstacle_summary = QLabel("")
         self.obstacle_summary.setObjectName("avoidHint")
@@ -468,3 +475,86 @@ class MainWindowAvoidanceMixin:
         self.avoidance_window.show()
         self.avoidance_window.raise_()
         self.avoidance_window.activateWindow()
+
+    def _open_obstacle_editor(self) -> None:
+        """打开障碍库编辑器。注意：运行中禁止改配置，需先暂停或重置。"""
+
+        if self.obstacle_editor is not None and self.obstacle_editor.isVisible():
+            self.obstacle_editor.raise_()
+            self.obstacle_editor.activateWindow()
+            return
+        if self.current_config_path is None:
+            self._report_avoidance_result("请先加载仿真配置。", "未加载配置，无法编辑障碍库", level="WARN")
+            return
+        if self.sim.snapshot().run_state == RunState.RUNNING:
+            self._report_avoidance_result("仿真运行中不能编辑障碍库，请先暂停。", "运行中拒绝编辑障碍库", level="WARN")
+            return
+        try:
+            library = self.sim.load_obstacle_library(self.current_config_path)
+        except (OSError, ValueError) as exc:
+            self._report_avoidance_result(f"无法打开障碍库：{exc}", f"读取障碍库失败：{exc}", level="WARN")
+            return
+        geo_reference = self.sim.gui_config.geo_reference
+        origin = (
+            GeoPointInput(geo_reference.latitude_deg, geo_reference.longitude_deg)
+            if geo_reference is not None
+            else None
+        )
+        editor = ObstacleEditorDialog(
+            library,
+            origin=origin,
+            save_handler=self._save_obstacle_editor_items,
+            preview_handler=self._preview_obstacle_editor_items,
+            parent=self.avoidance_window or self,
+        )
+        self.obstacle_editor = editor
+        # 取消时恢复应用层缓存中的已保存障碍；保存成功时加载流程已经刷新过界面。
+        editor.finished.connect(lambda _result, dialog=editor: self._finish_obstacle_editor(dialog))
+        editor.show()
+        editor.raise_()
+        editor.activateWindow()
+
+    def _preview_obstacle_editor_items(self, obstacles: list[ObstacleInput]) -> None:
+        """把有效草稿转换为 ENU 并刷新俯视图。注意：不写文件、不进入控制器。"""
+
+        try:
+            specs = self.sim.preview_obstacle_inputs(obstacles)
+        except ValueError as exc:
+            self.avoidance_status.setText(f"障碍草稿暂不可预览：{exc}")
+            return
+        self.obstacles = [obstacle_spec_to_view(spec) for spec in specs]
+        self._invalidate_preview()
+        self.top_view.set_obstacles(self.obstacles, self.clearance_spin.value())
+        self._rebuild_obstacle_list()
+        self._update_situation3d_snapshot(self.sim.snapshot())
+
+    def _save_obstacle_editor_items(
+        self,
+        obstacles: list[ObstacleInput],
+        target_path: Path | None,
+    ) -> ObstacleLibraryData:
+        """保存编辑草稿并重新加载当前配置。注意：重新加载会把仿真恢复到 READY。"""
+
+        if self.current_config_path is None:
+            raise ValueError("当前没有已加载配置")
+        if self.sim.snapshot().run_state == RunState.RUNNING:
+            raise ValueError("仿真运行中不能保存障碍库，请先暂停")
+        config_path = self.current_config_path
+        saved = self.sim.save_obstacle_library(config_path, obstacles, target_path)
+        # 统一走现有配置加载入口，使控制器、GUI 缓存和磁盘数据保持同一版本。
+        self._apply_config_path(str(config_path), remember=False)
+        if self.sim.last_result_code != "OK":
+            raise ValueError(f"障碍已写入，但配置重新加载失败：{self.sim.last_result_message}")
+        self._report_avoidance_result(
+            f"障碍库已保存并应用：{saved.path.name}",
+            f"障碍库已保存并应用：{saved.path}",
+        )
+        return saved
+
+    def _finish_obstacle_editor(self, dialog: ObstacleEditorDialog) -> None:
+        """收口障碍编辑会话，取消时恢复磁盘版本的显示。"""
+
+        if not dialog.saved and self.current_config_path is not None:
+            self._set_obstacles_from_config(str(self.current_config_path))
+        if self.obstacle_editor is dialog:
+            self.obstacle_editor = None

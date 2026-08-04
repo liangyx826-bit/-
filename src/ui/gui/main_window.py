@@ -41,6 +41,7 @@ from src.ui.gui.main_window_actions import MainWindowActionMixin
 from src.ui.gui.main_window_avoidance import MainWindowAvoidanceMixin
 from src.ui.gui.main_window_layout import MainWindowLayoutMixin
 from src.ui.gui.main_window_style import MainWindowStyleMixin
+from src.ui.gui.obstacle_editor import ObstacleEditorDialog
 from src.ui.gui.side_view import SideView
 from src.ui.gui.side_view_control_view_model import SideViewControlViewModel
 from src.ui.gui.sim_control_view_model import SimControlViewModel
@@ -71,6 +72,7 @@ from src.ui.gui.view_models import (
     is_leader_node,
     reference_route_points,
 )
+
 APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "app_icon.png"
 
 
@@ -135,6 +137,7 @@ class MainWindow(
         self._preview_route: PlannedRoute | None = None
         self._top_view_geo_origin: GeoReference | None = None
         self.avoidance_window: AvoidanceWindow | None = None
+        self.obstacle_editor: ObstacleEditorDialog | None = None
         # 组装界面 -> 设置手型光标 -> 应用主题 -> 用初始快照刷新一次显示。
         self._build_ui()
         self._install_button_cursors()
