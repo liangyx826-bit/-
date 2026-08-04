@@ -10,6 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FULL_RELEASE_SCRIPT = PROJECT_ROOT / "scripts" / "build_windows_full_release.ps1"
 LITE_RELEASE_SCRIPT = PROJECT_ROOT / "scripts" / "build_windows_lite_release.ps1"
 WINDOWS_EXE_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "build-windows-exe.yml"
+WINDOWS_RELEASE_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "release-windows.yml"
 APP_ICON_PNG = PROJECT_ROOT / "src" / "ui" / "gui" / "assets" / "app_icon.png"
 APP_ICON_ICO = PROJECT_ROOT / "src" / "ui" / "gui" / "assets" / "app_icon.ico"
 
@@ -58,6 +59,15 @@ class WindowsPackagingScriptTests(unittest.TestCase):
             script = script_path.read_text(encoding="utf-8")
             self.assertIn("src/ui/gui/main_window.py", script)
             self.assertNotIn("src/main.py", script)
+
+    def test_tag_release_uses_stable_full_and_lite_package_names(self) -> None:
+        """Tag 发布应上传命名稳定的全量版和裁剪版压缩包。"""
+
+        workflow = WINDOWS_RELEASE_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("package: formation-sim-windows-x64-full", workflow)
+        self.assertIn("package: formation-sim-windows-x64-lite", workflow)
+        self.assertIn("pattern: formation-sim-windows-x64-*", workflow)
 
 if __name__ == "__main__":
     unittest.main()

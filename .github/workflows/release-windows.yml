@@ -19,12 +19,12 @@ jobs:
           - profile: full
             script: ./scripts/build_windows_full_release.ps1
             exe: 编队仿真.exe
-            package: 编队仿真-windows-x64-full
+            package: formation-sim-windows-x64-full
             include_models: true
           - profile: lite
             script: ./scripts/build_windows_lite_release.ps1
             exe: 编队仿真-裁剪版.exe
-            package: 编队仿真-windows-x64-lite
+            package: formation-sim-windows-x64-lite
             include_models: false
 
     steps:
@@ -81,7 +81,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release-assets
-          pattern: 编队仿真-windows-x64-*
+          pattern: formation-sim-windows-x64-*
           merge-multiple: true
 
       - name: 创建 Release 并上传资产
@@ -91,18 +91,19 @@ jobs:
           cat > release-notes.md <<'EOF'
           ## 版本说明
 
-          本版本提供 Windows x64 全量版和裁剪版客户端。
+          V1.1.0 围绕仿真配置、可复现评测和界面性能进行了增强。
 
           ## 主要更新
 
-          - 支持可插拔机型和三维态势显示。
-          - 支持集结待命、五机演示和相关仿真流程。
-          - 完善自动化测试、持续集成和发布打包流程。
+          - 新增障碍区配置窗口，支持可视化维护障碍数据，并修复切换配置时的障碍库串写问题。
+          - 完善随机种子驱动的不确定性仿真，覆盖链路丢包、限频、时延和紊流扰动，便于批量复现与对比。
+          - 扩展离线控制效果与编队精度分析，补充误差、过载、控制指令、收敛和算法耗时等评测指标。
+          - 优化三维占位地形构建与参数更新，减少重复重建并提升场景加载效率。
 
           ## 下载说明
 
-          - 全量版：包含完整功能和三维模型文件。
-          - 裁剪版：保留核心仿真与避障功能，包体更小。
+          - 全量版：适用于需要实时监控、离线分析和三维态势的完整使用场景。
+          - 裁剪版：适用于仅需主仿真、避障规划和基础界面的轻量使用场景。
           EOF
           gh release create "${GITHUB_REF_NAME}" release-assets/*.zip \
             --repo "${GITHUB_REPOSITORY}" \
