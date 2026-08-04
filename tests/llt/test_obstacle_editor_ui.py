@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -134,6 +135,27 @@ class ObstacleEditorUiTests(unittest.TestCase):
 
         self.assertEqual(len(window.obstacles), original_count)
         self.assertIsNone(window.obstacle_editor)
+
+    def test_save_rejects_when_main_window_config_changed(self) -> None:
+        """编辑期间切换主配置后，应拒绝保存，避免草稿覆盖另一套障碍库。"""
+
+        project_root = Path(__file__).resolve().parents[2]
+        window = MainWindow(project_root=project_root, auto_load_config=False)
+        self.addCleanup(window.close)
+        window._apply_config_path(str(project_root / "configs" / "diamond.json"))
+        window.edit_obstacle_library_button.click()
+        editor = window.obstacle_editor
+        self.assertIsNotNone(editor)
+        assert editor is not None
+
+        window._apply_config_path(str(project_root / "configs" / "base.json"))
+        with patch.object(window.sim, "save_obstacle_library") as save_obstacle_library:
+            editor.save_button.click()
+
+        save_obstacle_library.assert_not_called()
+        self.assertIs(window.obstacle_editor, editor)
+        self.assertIn("主界面配置已切换", editor.validation_label.text())
+        self.assertEqual(window.current_config_path, (project_root / "configs" / "base.json").resolve())
 
 
 if __name__ == "__main__":

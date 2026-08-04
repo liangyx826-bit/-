@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -503,7 +504,7 @@ class MainWindowAvoidanceMixin:
         editor = ObstacleEditorDialog(
             library,
             origin=origin,
-            save_handler=self._save_obstacle_editor_items,
+            save_handler=partial(self._save_obstacle_editor_items, library.config_path),
             preview_handler=self._preview_obstacle_editor_items,
             parent=self.avoidance_window or self,
         )
@@ -530,19 +531,25 @@ class MainWindowAvoidanceMixin:
 
     def _save_obstacle_editor_items(
         self,
+        session_config_path: Path,
         obstacles: list[ObstacleInput],
         target_path: Path | None,
     ) -> ObstacleLibraryData:
-        """保存编辑草稿并重新加载当前配置。注意：重新加载会把仿真恢复到 READY。"""
+        """保存编辑草稿并重新加载会话配置。注意：主界面切换配置后拒绝保存。"""
 
         if self.current_config_path is None:
             raise ValueError("当前没有已加载配置")
+        session_config_path = session_config_path.resolve()
+        if self.current_config_path.resolve() != session_config_path:
+            raise ValueError(
+                f"主界面配置已切换，当前障碍草稿仍属于 {session_config_path.name}；"
+                "为避免覆盖其他障碍库，请取消并从当前配置重新打开编辑器"
+            )
         if self.sim.snapshot().run_state == RunState.RUNNING:
             raise ValueError("仿真运行中不能保存障碍库，请先暂停")
-        config_path = self.current_config_path
-        saved = self.sim.save_obstacle_library(config_path, obstacles, target_path)
+        saved = self.sim.save_obstacle_library(session_config_path, obstacles, target_path)
         # 统一走现有配置加载入口，使控制器、GUI 缓存和磁盘数据保持同一版本。
-        self._apply_config_path(str(config_path), remember=False)
+        self._apply_config_path(str(session_config_path), remember=False)
         if self.sim.last_result_code != "OK":
             raise ValueError(f"障碍已写入，但配置重新加载失败：{self.sim.last_result_message}")
         self._report_avoidance_result(
