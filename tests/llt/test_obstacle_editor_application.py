@@ -65,7 +65,7 @@ class ObstacleEditorApplicationTests(unittest.TestCase):
 
             library = load_obstacle_library(config_path)
 
-        self.assertEqual(library.path, obstacle_path)
+        self.assertEqual(library.path, obstacle_path.resolve())
         self.assertEqual(library.reference, "element/obstacles.json")
         self.assertEqual(library.obstacles[0].center, GeoPointInput(31.02, 121.03))
         self.assertEqual(library.obstacles[0].radius_m, 800.0)
@@ -86,7 +86,7 @@ class ObstacleEditorApplicationTests(unittest.TestCase):
             saved = save_obstacle_library(config_path, obstacles)
             payload = json.loads(obstacle_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(saved.path, obstacle_path)
+        self.assertEqual(saved.path, obstacle_path.resolve())
         self.assertEqual(payload[0]["center"]["latitude_deg"], 32.1234568)
         self.assertEqual(payload[0]["center"]["longitude_deg"], 122.2345679)
         self.assertFalse(payload[0]["enabled"])
@@ -113,7 +113,7 @@ class ObstacleEditorApplicationTests(unittest.TestCase):
             config = json.loads(config_path.read_text(encoding="utf-8"))
             target_exists = target.is_file()
 
-        self.assertEqual(saved.path, target)
+        self.assertEqual(saved.path, target.resolve())
         self.assertEqual(config["avoidance"]["obstacles_file"], "element/custom_obstacles.json")
         self.assertTrue(target_exists)
 
