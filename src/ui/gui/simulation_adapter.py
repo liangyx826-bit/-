@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from src.runner.sim_control import (
@@ -12,21 +12,27 @@ from src.runner.sim_control import (
     DisturbanceType,
     GeoReference,
     GuiConfigData,
+    ObstacleInput,
+    ObstacleLibraryData,
     ObstacleSpec,
     PlannedRoute,
+    SimulationController,
+    TimedSnapshotCursor,
     apply_planned_route,
     export_planned_route,
     geodetic_from_enu,
     load_gui_config,
+    load_obstacle_library,
+    obstacle_inputs_to_specs,
     persist_config_duration,
     plan_route_for_gui,
     planned_route_from_waypoints,
     route_export_defaults,
+    save_obstacle_library,
 )
 from src.runner.sim_control import LinkState as ControllerLinkState
 from src.runner.sim_control import NodeState as ControllerNodeState
 from src.runner.sim_control import RouteState as ControllerRouteState
-from src.runner.sim_control import SimulationController, TimedSnapshotCursor
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 from src.ui.gui.disturbance_view_model import active_disturbance_text, disturbance_action
 from src.ui.gui.playback_view_model import PlaybackViewModel
@@ -170,6 +176,26 @@ class ControllerSimulationAdapter:
         """规划避障航线。注意：算法类型与转换全部封装在 runner 应用层。"""
 
         return plan_route_for_gui(waypoints, obstacles, **kwargs)
+
+    def load_obstacle_library(self, config_path: Path) -> ObstacleLibraryData:
+        """读取当前配置引用的原始经纬度障碍库。"""
+
+        return load_obstacle_library(config_path)
+
+    def preview_obstacle_inputs(self, obstacles: list[ObstacleInput]) -> list[ObstacleSpec]:
+        """把编辑草稿转换成俯视图预览障碍。注意：不写文件。"""
+
+        return obstacle_inputs_to_specs(obstacles, self.gui_config.geo_reference)
+
+    def save_obstacle_library(
+        self,
+        config_path: Path,
+        obstacles: list[ObstacleInput],
+        target_path: Path | None = None,
+    ) -> ObstacleLibraryData:
+        """保存障碍库；target_path 非空时同步更新主配置引用。"""
+
+        return save_obstacle_library(config_path, obstacles, target_path=target_path)
 
     def route_export_defaults(self, config_path: Path) -> tuple[Path, str]:
         """获取航线导出默认路径与过滤器。"""

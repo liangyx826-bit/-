@@ -9,6 +9,35 @@ from __future__ import annotations
 
 import time
 
+from src.runner.gui_application import (
+    AvoidanceParams,
+    AvoidancePlanOutcome,
+    GeoReference,
+    GuiConfigData,
+    ObstacleKind,
+    ObstacleSpec,
+    PlannedRoute,
+    apply_planned_route,
+    export_planned_route,
+    geodetic_from_enu,
+    load_gui_config,
+    persist_config_duration,
+    plan_route_for_gui,
+    planned_route_from_waypoints,
+    preview_route_marker_points,
+    route_export_defaults,
+    route_inputs_to_config,
+    route_to_polyline,
+)
+from src.runner.obstacle_editor_application import (
+    GeoPointInput,
+    ObstacleInput,
+    ObstacleLibraryData,
+    load_obstacle_library,
+    obstacle_inputs_to_specs,
+    save_obstacle_library,
+    validate_obstacle_inputs,
+)
 from src.runner.sim_control_constants import (
     _COMM_DECIMATION,
     _CPU_UTILIZATION_SAMPLE_PERIOD_S,
@@ -63,25 +92,5 @@ from src.runner.sim_control_types import (
     TimedSnapshotCursor,
     _ConfiguredLink,
     _NodeAlgorithmOutput,
-)
-from src.runner.gui_application import (
-    AvoidanceParams,
-    AvoidancePlanOutcome,
-    GeoReference,
-    GuiConfigData,
-    ObstacleKind,
-    ObstacleSpec,
-    PlannedRoute,
-    apply_planned_route,
-    export_planned_route,
-    geodetic_from_enu,
-    load_gui_config,
-    persist_config_duration,
-    plan_route_for_gui,
-    planned_route_from_waypoints,
-    preview_route_marker_points,
-    route_export_defaults,
-    route_inputs_to_config,
-    route_to_polyline,
 )
 from src.runner.sim_controller import SimulationController

@@ -61,6 +61,7 @@ extend-exclude = ["build", "dist"]
 [tool.ruff.lint]
 # 宽松起步：只用 ruff 默认规则集（E4/E7/E9/F，均为真实缺陷类），
 # 风格类规则（如行宽 E501、import 排序 I）后续再逐步收紧。
+select = ["E4", "E7", "E9", "F"]
 ignore = [
     "E731", # lambda 赋值在 GUI 回调/测试桩里属于惯用写法，暂不强制改 def
 ]

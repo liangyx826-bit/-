@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from src.data.obstaclefile.strategy import ObstacleFileStrategy
@@ -31,6 +33,13 @@ class JsonObstacleFileStrategy(ObstacleFileStrategy):
 
     def save(self, path: Path, obstacles: list[object]) -> None:
         """写入 JSON 障碍文件。注意：默认生成数组根，保持当前 element/obstacles.json 形态。"""
-        # 生成时自动建目录，便于后续 GUI 直接输出到 configs/element 之类的新路径。
+        # 生成时自动建目录；同目录临时文件 + replace 避免写入中断损坏原障碍库。
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(obstacles, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        os.close(descriptor)
+        temp_path = Path(temp_name)
+        try:
+            temp_path.write_text(json.dumps(obstacles, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            temp_path.replace(path)
+        finally:
+            temp_path.unlink(missing_ok=True)
