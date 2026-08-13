@@ -62,6 +62,7 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RallyJoinPosOutputS,
 )
 from src.algorithm.units.algo.pos_calc.route_interp import RouteInterpInputS
+from src.algorithm.units.algo.pos_calc.route_formation import RouteFormationInputS
 from src.algorithm.units.algo.pos_calc.slot_geometry import (
     SlotGeometry,
     SlotGeometryInitS,
@@ -3761,22 +3762,24 @@ class RallyEntityTests(unittest.TestCase):
         self.assertIs(leader._outbound._y.outbox, leader._outbox)
         leader_route = leader._pos_calc._registry[PosCalcStrategyE.ROUTE_INTERP]
         leader_rally = leader._pos_calc._registry[PosCalcStrategyE.RALLY_JOIN]
-        follower_slot = follower._pos_calc._registry[PosCalcStrategyE.SLOT_GEOMETRY]
+        follower_route = follower._pos_calc._registry[PosCalcStrategyE.ROUTE_FORMATION]
         follower_rally = follower._pos_calc._registry[PosCalcStrategyE.RALLY_JOIN]
         self.assertIsInstance(leader_route._u, RouteInterpInputS)
         self.assertIsInstance(leader_rally._u, RallyJoinPosInputS)
-        self.assertIsInstance(follower_slot._u, SlotGeometryInputS)
+        self.assertIsInstance(follower_route._u, RouteFormationInputS)
         self.assertIsInstance(follower_rally._u, RallyJoinPosInputS)
         # 位置解算产品在 bind 时只绑定自身需要的字段，不保存完整黑板，也不在 step 中搬运快照。
         self.assertIs(leader_route._u.selfState, leader.cxt.selfState)
         self.assertIs(leader_rally._u.selfState, leader.cxt.selfState)
-        self.assertIs(follower_slot._u.selfState, follower.cxt.selfState)
+        self.assertIs(follower_route._u.leaderState, follower.cxt.leaderState)
+        self.assertIs(follower_route._u.selfState, follower.cxt.selfState)
+        self.assertIs(follower_route._u.cmd, follower.cxt.cmd)
         self.assertIs(leader_route._y.selfCmd, leader.cxt.selfCmd)
         self.assertIs(leader_rally._y.status, leader.cxt.posCalcStatus)
-        self.assertIs(follower_slot._y.selfCmd, follower.cxt.selfCmd)
+        self.assertIs(follower_route._y.selfCmd, follower.cxt.selfCmd)
         self.assertFalse(hasattr(leader_route, "_cxt"))
         self.assertFalse(hasattr(leader_rally, "_cxt"))
-        self.assertFalse(hasattr(follower_slot, "_cxt"))
+        self.assertFalse(hasattr(follower_route, "_cxt"))
         self.assertFalse(hasattr(follower_rally, "_cxt"))
 
     def test_follower_reset_does_not_restore_plan_from_empty_inbox(self) -> None:
@@ -4208,16 +4211,19 @@ class RallyEntityTests(unittest.TestCase):
         )
 
         assert second.selfCmd is not None
-        # R02 固定槽位偏置 (x=-10,z=-5) 在东向航迹下投影为 (east=-10,north=5)。
+        # R02 在东向任务航线上按里程后移 10 m，并以 z=-5 向左偏置 5 m。
         self.assertAlmostEqual(second.selfCmd.pos.east, 90.0)
-        self.assertAlmostEqual(second.selfCmd.pos.north, 205.0)
+        self.assertAlmostEqual(second.selfCmd.pos.north, 10.0)
         # 长机沿东向以 20 m/s 直飞（无偏航角速率），槽位只透传自身速度前馈；
         # CATCHUP 不得再按位置误差额外调速，追赶速度修正由 PidCompose 前向外环生成。
         self.assertAlmostEqual(second.selfCmd.v.vEast, 20.0)
         self.assertAlmostEqual(second.selfCmd.v.vd, 20.0)
         self.assertAlmostEqual(second.selfCmd.v.vPsi, 0.0)
         # CATCHUP 门控统一使用到真实槽位的三维距离，高度误差也必须计入 pos_err_m。
-        self.assertAlmostEqual(second.outbox[0].payload["pos_err_m"], math.sqrt(80.0**2 + 185.0**2 + 10.0**2))
+        self.assertAlmostEqual(
+            second.outbox[0].payload["pos_err_m"],
+            math.sqrt(80.0**2 + 10.0**2 + 10.0**2),
+        )
         self.assertEqual(second.outbox[0].target, "R01")
 
     def test_rally_follower_waits_when_t_ref_is_not_valid_at_cold_start(self) -> None:

@@ -39,6 +39,7 @@ class PosCalcStrategyE(IntEnum):
     ROUTE_INTERP = 1  # 长机：沿当前任务航段生成目标
     SLOT_GEOMETRY = 2  # 僚机：按长机状态解算编队槽位
     RALLY_JOIN = 3  # 集结：待命、转场、盘旋和切出
+    ROUTE_FORMATION = 4  # 僚机：按规划航线里程偏置解算编队目标
 
 
 class PosTrackStrategyE(IntEnum):
