@@ -12,6 +12,7 @@ from unittest.mock import patch
 from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context import leaf_types
 from src.algorithm.context.leaf_types import (
+    AccInEarthS,
     AlgorithmClockS,
     CommDirE,
     FollowerStateS,
@@ -197,6 +198,8 @@ def _leader_msg(
     pattern: int = 0,
     step: int = 0,
     leader_state: MotionProfS | None = None,
+    leader_acc_cmd: AccInEarthS | None = None,
+    timestamp_s: float = 0.0,
     t_ref: float = 0.0,
     t_ref_valid: bool = True,
     loop_counts: dict[str, int] | None = None,
@@ -204,18 +207,25 @@ def _leader_msg(
     """构造集结长机广播消息。"""
 
     state = leader_state or _motion(east=100.0, north=200.0, h=500.0, v_east=20.0)
+    payload: dict[str, object] = {
+        "leader_state": _motion_payload(state),
+        "cmd": {"stage": int(stage), "pattern": int(pattern), "step": step},
+        "t_ref": t_ref,
+        "t_ref_valid": t_ref_valid,
+        "loop_counts": dict(loop_counts) if loop_counts is not None else {"R02": 0},
+    }
+    if leader_acc_cmd is not None:
+        payload["leader_acc_cmd"] = {
+            "accEast": leader_acc_cmd.accEast,
+            "accNorth": leader_acc_cmd.accNorth,
+            "accUp": leader_acc_cmd.accUp,
+        }
     return MessageEnvelope(
         topic="formation.leader",
         source="R01",
         target=["R02"],
-        timestamp=0.0,
-        payload={
-            "leader_state": _motion_payload(state),
-            "cmd": {"stage": int(stage), "pattern": int(pattern), "step": step},
-            "t_ref": t_ref,
-            "t_ref_valid": t_ref_valid,
-            "loop_counts": dict(loop_counts) if loop_counts is not None else {"R02": 0},
-        },
+        timestamp=timestamp_s,
+        payload=payload,
     )
 
 
@@ -347,7 +357,9 @@ def _formation_inbound_output(cxt: FormContextS) -> FormationInboundOutputS:
 
     return FormationInboundOutputS(
         leaderState=cxt.leaderState,
+        leaderClock=cxt.leaderClock,
         leaderCmd=cxt.leaderCmd,
+        leaderAccCmd=cxt.leaderAccCmd,
         cmd=cxt.cmd,
         rallyPlan=cxt.rallyPlan,
         followerStates=cxt.followerStates,
@@ -362,6 +374,7 @@ def _formation_outbound_input(cxt: FormContextS) -> FormationOutboundInputS:
         selfState=cxt.selfState,
         selfCmd=cxt.selfCmd,
         effectiveCmd=cxt.effectiveCmd,
+        selfAccCmd=cxt.selfAccCmd,
         rallyPlan=cxt.rallyPlan,
         posCalcStatus=cxt.posCalcStatus,
     )
@@ -1302,6 +1315,7 @@ class FormationInboundTests(unittest.TestCase):
         self.assertEqual(cxt.cmd.stage, FormStageE.RALLY)
         self.assertAlmostEqual(cxt.leaderState.pos.east, 100.0)
         self.assertEqual(cxt.leaderCmd, cxt.leaderState)
+        self.assertEqual(cxt.leaderAccCmd, AccInEarthS())
         self.assertEqual((cxt.rallyPlan.t_ref, cxt.rallyPlan.valid), (90.0, True))
         self.assertEqual(cxt.rallyPlan.loop_counts, {"R01": 0, "R02": 2})
         self.assertEqual([state.id for state in cxt.followerStates], ["R03"])
@@ -1368,6 +1382,7 @@ class FormationOutboundTests(unittest.TestCase):
         cxt = FormContextS()
         cxt.selfState = _motion(east=1.0, north=2.0, h=3.0)
         cxt.effectiveCmd = _motion(east=4.0, north=5.0, h=6.0)
+        cxt.selfAccCmd = AccInEarthS(1.5, -2.0, 0.25)
         cxt.cmd.stage = FormStageE.RALLY
         cxt.cmd.pattern = 2
         cxt.rallyPlan.t_ref = 90.0
@@ -1387,8 +1402,61 @@ class FormationOutboundTests(unittest.TestCase):
         message = output.outbox[0]
         self.assertEqual((message.topic, message.source, message.target), ("formation.leader", "R01", ["R02"]))
         self.assertEqual(message.payload["cmd"]["leader"]["pos"]["east"], 4.0)
+        self.assertEqual(
+            message.payload["leader_acc_cmd"],
+            {"accEast": 1.5, "accNorth": -2.0, "accUp": 0.25},
+        )
         self.assertEqual(message.payload["t_ref"], 90.0)
         self.assertEqual(message.payload["loop_counts"], {"R01": 0, "R02": 1})
+
+    def test_inbound_atomically_commits_leader_acceleration(self) -> None:
+        """统一入站应把长机状态、命令和加速度作为同一拍数据提交。"""
+
+        cxt = FormContextS()
+        inbound = FormationInbound()
+        inbound.init(FormationInboundInitS("R02"))
+
+        inbound._process(
+            FormationInboundInputS(
+                inbox=[_leader_msg(leader_acc_cmd=AccInEarthS(2.0, 3.0, -0.5))],
+                clock=cxt.clock,
+            ),
+            _formation_inbound_output(cxt),
+        )
+
+        self.assertEqual(cxt.leaderAccCmd, AccInEarthS(2.0, 3.0, -0.5))
+
+    def test_inbound_rejects_out_of_order_leader_snapshot(self) -> None:
+        """更旧的长机报文不得回退状态、加速度和角速度差分采样时刻。"""
+
+        cxt = FormContextS()
+        inbound = FormationInbound()
+        inbound.init(FormationInboundInitS("R02"))
+        output = _formation_inbound_output(cxt)
+        input_port = FormationInboundInputS(
+            inbox=[
+                _leader_msg(
+                    leader_state=_motion(east=200.0),
+                    leader_acc_cmd=AccInEarthS(2.0, 0.0, 0.0),
+                    timestamp_s=10.0,
+                )
+            ],
+            clock=cxt.clock,
+        )
+        inbound._process(input_port, output)
+
+        input_port.inbox = [
+            _leader_msg(
+                leader_state=_motion(east=100.0),
+                leader_acc_cmd=AccInEarthS(1.0, 0.0, 0.0),
+                timestamp_s=8.0,
+            )
+        ]
+        inbound._process(input_port, output)
+
+        self.assertEqual(cxt.leaderClock.now_s, 10.0)
+        self.assertEqual(cxt.leaderState.pos.east, 200.0)
+        self.assertEqual(cxt.leaderAccCmd.accEast, 2.0)
 
     def test_standby_broadcast_uses_unsaturated_position_command(self) -> None:
         """STANDBY 广播应保持旧语义，使用本地盘旋 selfCmd 而不是跟踪限幅结果。"""
